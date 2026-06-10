@@ -1,0 +1,14 @@
+src/
+node_modules/
+.github/
+.pnpm-store/
+*.test.ts
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+.editorconfig
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+pnpm-lock.yaml
+*.tsbuildinfo

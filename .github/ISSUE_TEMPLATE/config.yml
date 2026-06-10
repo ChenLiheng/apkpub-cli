@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞上报
+    url: https://github.com/youlai/apkpub-cli/security/advisories/new
+    about: 请通过 Security Advisories 私密上报安全问题，不要公开提交 Issue

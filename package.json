@@ -1,0 +1,85 @@
+{
+  "name": "apkpub-cli",
+  "version": "1.0.0",
+  "description": "APK 多市场分发 CLI 工具 - 一键发布到华为/小米/OPPO/VIVO/荣耀及自定义渠道",
+  "type": "module",
+  "main": "dist/apkpub.js",
+  "bin": {
+    "apkpub": "dist/apkpub.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/apkpub.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "apk",
+    "android",
+    "publish",
+    "cli",
+    "app-store",
+    "huawei",
+    "xiaomi",
+    "oppo",
+    "vivo",
+    "honor",
+    "oss",
+    "mcp",
+    "ci-cd"
+  ],
+  "author": "youlai",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/youlai/apkpub-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/youlai/apkpub-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/youlai/apkpub-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.3.2",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ali-oss": "^6.22.0",
+    "app-info-parser": "^1.1.6",
+    "axios": "^1.8.4",
+    "cli-progress": "^3.12.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "form-data": "^4.0.2",
+    "ora": "^8.2.0",
+    "p-limit": "^6.2.0",
+    "picocolors": "^1.1.1",
+    "zod": "^3.24.2"
+  },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "^6.16.11",
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^22.14.0",
+    "nock": "^14.0.1",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}
