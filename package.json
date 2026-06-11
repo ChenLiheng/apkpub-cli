@@ -1,6 +1,6 @@
 {
   "name": "apkpub-cli",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "APK 多市场分发 CLI 工具 - 一键发布到华为/小米/OPPO/VIVO/荣耀及自定义渠道",
   "type": "module",
   "main": "dist/apkpub.js",
@@ -21,7 +21,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "release:alpha": "pnpm version prerelease --preid alpha && pnpm publish --tag alpha",
+    "release:beta": "pnpm version prerelease --preid beta && pnpm publish --tag beta",
+    "release:rc": "pnpm version prerelease --preid rc && pnpm publish --tag rc",
+    "release": "pnpm publish"
   },
   "keywords": [
     "apk",
