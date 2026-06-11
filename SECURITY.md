@@ -10,7 +10,7 @@
 
 如果你发现安全漏洞，请**不要**通过公开 Issue 提交。请通过以下方式私下联系维护者：
 
-- 通过 GitHub [Security Advisories](https://github.com/youlai/apkpub-cli/security/advisories/new) 私密上报
+- 通过 GitHub [Security Advisories](https://github.com/your-org/apkpub-cli/security/advisories/new) 私密上报
 
 我们会在收到报告后尽快响应，并在修复发布前与你协调披露时间。
 

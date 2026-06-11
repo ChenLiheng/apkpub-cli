@@ -4,25 +4,31 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[English](README.md) | **简体中文**
-
 APK 多市场分发 CLI 工具。支持将已签名的 APK 一键发布到华为、小米、OPPO、VIVO、荣耀应用市场，以及可配置的自定义上传渠道（阿里云 OSS / 通用 HTTP）。面向 CI/CD、本地命令行与 AI Agent（内置 MCP server）。
 
 ## 目录
 
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [配置管理](#配置管理)
-- [密钥管理](#密钥管理)
-- [自定义渠道（通用上传）](#自定义渠道通用上传)
-- [内置市场渠道](#内置市场渠道)
-- [Agent / MCP 集成](#agent--mcp-集成)
-- [CI 集成示例](#ci-集成示例)
-- [退出码](#退出码)
-- [开发](#开发)
-- [安全说明](#安全说明)
-- [贡献](#贡献)
-- [许可证](#许可证)
+- [apkpub-cli](#apkpub-cli)
+  - [目录](#目录)
+  - [安装](#安装)
+  - [快速开始](#快速开始)
+    - [1. 创建应用配置](#1-创建应用配置)
+    - [2. 解析 APK](#2-解析-apk)
+    - [3. 查询市场状态](#3-查询市场状态)
+    - [4. 发布 APK](#4-发布-apk)
+    - [5. 配置体检](#5-配置体检)
+  - [配置管理](#配置管理)
+  - [密钥管理](#密钥管理)
+  - [自定义渠道（通用上传）](#自定义渠道通用上传)
+  - [内置市场渠道](#内置市场渠道)
+  - [Agent / MCP 集成](#agent--mcp-集成)
+    - [Cursor MCP 配置示例](#cursor-mcp-配置示例)
+  - [CI 集成示例](#ci-集成示例)
+  - [退出码](#退出码)
+  - [开发](#开发)
+  - [安全说明](#安全说明)
+  - [贡献](#贡献)
+  - [许可证](#许可证)
 
 ## 安装
 
@@ -113,21 +119,21 @@ apkpub config import config.json
 
 ```json
 {
-  "name": "youlai",
+  "name": "myOss",
   "type": "custom",
   "enable": true,
   "uploadType": "oss",
-  "fileNameIdentify": "youlai",
+  "fileNameIdentify": "myOss",
   "endpoint": "https://oss-cn-beijing.aliyuncs.com",
-  "bucket": "youlai",
+  "bucket": "my-bucket",
   "auth": {
     "mode": "sts",
     "stsTokenUrl": "https://your-api.com/v1/getSTSToken",
     "signKey": "${STS_SIGN_KEY}",
     "contextB": "{}"
   },
-  "objectKeyTemplate": "cnkfile1/M00/app/{fileName}",
-  "downloadUrlTemplate": "https://file.youlai.cn/{objectKey}"
+  "objectKeyTemplate": "apps/{appId}/{fileName}",
+  "downloadUrlTemplate": "https://cdn.example.com/{objectKey}"
 }
 ```
 
@@ -148,13 +154,13 @@ HTTP 上传示例：
 
 ## 内置市场渠道
 
-| 渠道 | 标识 | 凭证字段 |
-|------|------|----------|
-| 华为 | `huawei` | client_id, client_secret |
-| 荣耀 | `honor` | client_id, client_secret |
-| 小米 | `mi` | account, publicKey, privateKey |
-| OPPO | `oppo` | client_id, client_secret |
-| VIVO | `vivo` | access_key, access_secret |
+| 渠道 | 标识     | 凭证字段                       |
+| ---- | -------- | ------------------------------ |
+| 华为 | `huawei` | client_id, client_secret       |
+| 荣耀 | `honor`  | client_id, client_secret       |
+| 小米 | `mi`     | account, publicKey, privateKey |
+| OPPO | `oppo`   | client_id, client_secret       |
+| VIVO | `vivo`   | access_key, access_secret      |
 
 多渠道包文件名标识（默认）：HUAWEI / HONOR / MI / OPPO / VIVO
 
@@ -201,13 +207,13 @@ MCP 暴露工具：`apkpub_info`、`apkpub_status`、`apkpub_publish`、`apkpub_
 
 ## 退出码
 
-| 码 | 含义 |
-|----|------|
-| 0 | 全部成功 |
-| 2 | 参数/配置错误 |
-| 3 | 版本校验失败 |
-| 4 | 部分渠道失败 |
-| 5 | 全部失败 |
+| 码  | 含义          |
+| --- | ------------- |
+| 0   | 全部成功      |
+| 2   | 参数/配置错误 |
+| 3   | 版本校验失败  |
+| 4   | 部分渠道失败  |
+| 5   | 全部失败      |
 
 ## 开发
 

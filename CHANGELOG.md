@@ -23,5 +23,5 @@
 - MCP server 模式，向 Agent 暴露 `publish/status/info/doctor` 工具
 - 安全：输出脱敏、SSRF 防护、模板路径穿越防护、配置文件权限校验
 
-[未发布]: https://github.com/youlai/apkpub-cli/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/youlai/apkpub-cli/releases/tag/v1.0.0
+[未发布]: https://github.com/your-org/apkpub-cli/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/your-org/apkpub-cli/releases/tag/v1.0.0

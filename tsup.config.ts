@@ -6,7 +6,7 @@ export default defineConfig({
   target: 'node18',
   outDir: 'dist',
   clean: true,
-  sourcemap: true,
+  sourcemap: false,
   dts: false,
   shims: true,
   external: ['keytar', 'app-info-parser'],

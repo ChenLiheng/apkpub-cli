@@ -38,15 +38,15 @@
     "mcp",
     "ci-cd"
   ],
-  "author": "youlai",
+  "author": "",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/youlai/apkpub-cli#readme",
+  "homepage": "https://github.com/your-org/apkpub-cli#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/youlai/apkpub-cli.git"
+    "url": "git+https://github.com/your-org/apkpub-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/youlai/apkpub-cli/issues"
+    "url": "https://github.com/your-org/apkpub-cli/issues"
   },
   "publishConfig": {
     "access": "public"
