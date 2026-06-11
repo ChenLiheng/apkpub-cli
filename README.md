@@ -1,5 +1,7 @@
 # apkpub-cli
 
+[![npm version](https://img.shields.io/npm/v/apkpub-cli.svg)](https://www.npmjs.com/package/apkpub-cli)
+[![npm downloads](https://img.shields.io/npm/dm/apkpub-cli.svg)](https://www.npmjs.com/package/apkpub-cli)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -32,10 +34,12 @@ APK 多市场分发 CLI 工具。支持将已签名的 APK 一键发布到华为
 
 ## 安装
 
+通过 npm 或 pnpm 全局安装：
+
 ```bash
-pnpm install
-pnpm build
-pnpm link --global  # 或 npm link
+npm i apkpub-cli
+# 或
+pnpm i apkpub-cli
 ```
 
 ## 快速开始
