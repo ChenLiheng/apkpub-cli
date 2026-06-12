@@ -1,0 +1,1688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>apkpub-cli — APK 多市场分发命令行工具</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   RESET & VARIABLES
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --black: #0a0a0b;
+  --gray-950: #111113;
+  --gray-900: #18181b;
+  --gray-800: #27272a;
+  --gray-700: #3f3f46;
+  --gray-600: #52525b;
+  --gray-500: #71717a;
+  --gray-400: #a1a1aa;
+  --gray-300: #d4d4d8;
+  --gray-200: #e4e4e7;
+  --gray-100: #f4f4f5;
+  --white: #fafafa;
+
+  --accent: #3b82f6;
+  --accent-light: #60a5fa;
+  --accent-dark: #2563eb;
+  --accent-glow: rgba(59,130,246,0.15);
+  --green: #22c55e;
+  --green-bg: rgba(34,197,94,0.1);
+  --amber: #f59e0b;
+  --amber-bg: rgba(245,158,11,0.1);
+  --red: #ef4444;
+  --red-bg: rgba(239,68,68,0.1);
+  --purple: #a855f7;
+  --purple-bg: rgba(168,85,247,0.1);
+  --cyan: #06b6d4;
+  --cyan-bg: rgba(6,182,212,0.1);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --max-w: 1200px;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--black);
+  color: var(--gray-200);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ============================================================
+   UTILITY
+   ============================================================ */
+.container {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-light);
+  margin-bottom: 12px;
+}
+.section-label::before {
+  content: '';
+  width: 24px;
+  height: 1.5px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.section-title {
+  font-size: clamp(28px, 4.5vw, 48px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  color: var(--white);
+  margin-bottom: 16px;
+}
+
+.section-desc {
+  font-size: 17px;
+  color: var(--gray-400);
+  max-width: 600px;
+  line-height: 1.7;
+}
+
+/* ============================================================
+   ANIMATED BACKGROUND
+   ============================================================ */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+.bg-glow {
+  position: fixed;
+  top: -20vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 800px;
+  height: 600px;
+  background: radial-gradient(ellipse at center, rgba(59,130,246,0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ============================================================
+   NAV
+   ============================================================ */
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(10,10,11,0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--gray-800);
+}
+
+nav .container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--white);
+  text-decoration: none;
+}
+
+.nav-brand-icon {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+  color: white;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  list-style: none;
+}
+
+.nav-links a {
+  color: var(--gray-400);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.nav-links a:hover { color: var(--white); }
+
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  background: var(--accent);
+  color: white !important;
+  border-radius: var(--radius-sm);
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  transition: background 0.2s, transform 0.15s !important;
+}
+
+.nav-cta:hover {
+  background: var(--accent-dark) !important;
+  transform: translateY(-1px);
+  color: white !important;
+}
+
+/* ============================================================
+   HERO
+   ============================================================ */
+.hero {
+  position: relative;
+  z-index: 1;
+  padding: 100px 0 80px;
+  text-align: center;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--green-bg);
+  border: 1px solid rgba(34,197,94,0.2);
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--green);
+  margin-bottom: 24px;
+}
+
+.hero h1 {
+  font-size: clamp(36px, 6vw, 72px);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+  color: var(--white);
+  margin-bottom: 20px;
+}
+
+.hero h1 .highlight {
+  background: linear-gradient(135deg, var(--accent), var(--purple), var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero p {
+  font-size: clamp(16px, 2vw, 20px);
+  color: var(--gray-400);
+  max-width: 680px;
+  margin: 0 auto 40px;
+  line-height: 1.7;
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 48px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 28px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 4px 20px rgba(59,130,246,0.3);
+}
+
+.btn-primary:hover {
+  background: var(--accent-dark);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(59,130,246,0.4);
+}
+
+.btn-secondary {
+  background: var(--gray-800);
+  color: var(--gray-200);
+  border: 1px solid var(--gray-700);
+}
+
+.btn-secondary:hover {
+  background: var(--gray-700);
+  border-color: var(--gray-600);
+  transform: translateY(-2px);
+}
+
+.hero-demo {
+  max-width: 780px;
+  margin: 0 auto;
+  background: var(--gray-950);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  text-align: left;
+}
+
+.demo-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  background: var(--gray-900);
+  border-bottom: 1px solid var(--gray-800);
+}
+
+.demo-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.demo-dot:nth-child(1) { background: #ef4444; }
+.demo-dot:nth-child(2) { background: #f59e0b; }
+.demo-dot:nth-child(3) { background: #22c55e; }
+
+.demo-title {
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--gray-500);
+  font-family: var(--font-mono);
+}
+
+.demo-body {
+  padding: 20px 24px;
+  overflow-x: auto;
+}
+
+.demo-body pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--gray-300);
+}
+
+.demo-body .cmd { color: var(--accent-light); }
+.demo-body .comment { color: var(--gray-500); }
+.demo-body .str { color: var(--green); }
+.demo-body .key { color: var(--cyan); }
+.demo-body .dim { color: var(--gray-500); }
+
+.hero-stats {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  margin-top: 60px;
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--white);
+  letter-spacing: -0.02em;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+/* ============================================================
+   SECTION: PROBLEM / SOLUTION
+   ============================================================ */
+.section {
+  position: relative;
+  z-index: 1;
+  padding: 100px 0;
+}
+
+.section-alt {
+  background: var(--gray-950);
+}
+
+.split-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: start;
+}
+
+.problem-card {
+  background: var(--gray-900);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-md);
+  padding: 32px;
+}
+
+.problem-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--red);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.problem-card ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.problem-card li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--gray-400);
+  line-height: 1.5;
+}
+
+.problem-card li::before {
+  content: '✕';
+  color: var(--red);
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.solution-card {
+  background: linear-gradient(135deg, rgba(59,130,246,0.06), rgba(168,85,247,0.06));
+  border: 1px solid rgba(59,130,246,0.15);
+  border-radius: var(--radius-md);
+  padding: 32px;
+}
+
+.solution-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--green);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.solution-card ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.solution-card li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--gray-300);
+  line-height: 1.5;
+}
+
+.solution-card li::before {
+  content: '✓';
+  color: var(--green);
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ============================================================
+   SECTION: FEATURES
+   ============================================================ */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 48px;
+}
+
+.feature-card {
+  background: var(--gray-900);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-md);
+  padding: 28px;
+  transition: all 0.25s;
+}
+
+.feature-card:hover {
+  border-color: var(--gray-600);
+  transform: translateY(-3px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+}
+
+.feature-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+
+.feature-icon.blue { background: rgba(59,130,246,0.12); color: var(--accent-light); }
+.feature-icon.green { background: var(--green-bg); color: var(--green); }
+.feature-icon.purple { background: var(--purple-bg); color: var(--purple); }
+.feature-icon.amber { background: var(--amber-bg); color: var(--amber); }
+.feature-icon.cyan { background: var(--cyan-bg); color: var(--cyan); }
+.feature-icon.red { background: var(--red-bg); color: var(--red); }
+
+.feature-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--white);
+  margin-bottom: 8px;
+}
+
+.feature-card p {
+  font-size: 14px;
+  color: var(--gray-400);
+  line-height: 1.6;
+}
+
+/* ============================================================
+   SECTION: MARKET CHANNELS
+   ============================================================ */
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-top: 40px;
+}
+
+.channel-card {
+  background: var(--gray-900);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-md);
+  padding: 24px 16px;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.channel-card:hover {
+  border-color: var(--gray-600);
+  transform: translateY(-2px);
+}
+
+.channel-card .icon {
+  font-size: 32px;
+  margin-bottom: 10px;
+  display: block;
+}
+
+.channel-card .name {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--white);
+  margin-bottom: 4px;
+}
+
+.channel-card .tag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gray-500);
+  font-family: var(--font-mono);
+  background: var(--gray-800);
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.custom-channel-note {
+  margin-top: 20px;
+  text-align: center;
+  padding: 16px;
+  background: var(--gray-900);
+  border: 1px dashed var(--gray-700);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  color: var(--gray-400);
+}
+
+.custom-channel-note strong {
+  color: var(--gray-200);
+}
+
+/* ============================================================
+   SECTION: CODE DEMO
+   ============================================================ */
+.code-showcase {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 48px;
+}
+
+.code-block {
+  background: var(--gray-950);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--gray-900);
+  border-bottom: 1px solid var(--gray-800);
+}
+
+.code-block-header .label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-400);
+  font-family: var(--font-mono);
+}
+
+.code-block-header .copy-indicator {
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+.code-body {
+  padding: 18px;
+  overflow-x: auto;
+}
+
+.code-body pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--gray-300);
+}
+
+.code-body .kw { color: #c084fc; }       /* keyword */
+.code-body .fn { color: #60a5fa; }       /* function */
+.code-body .cm { color: var(--gray-500); font-style: italic; }
+.code-body .st { color: var(--green); }
+.code-body .nu { color: #f59e0b; }
+.code-body .op { color: #e879f9; }
+.code-body .ty { color: var(--cyan); }
+
+/* ============================================================
+   SECTION: ARCHITECTURE
+   ============================================================ */
+.arch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  margin-top: 40px;
+  align-items: center;
+}
+
+.arch-diagram {
+  background: var(--gray-950);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-lg);
+  padding: 36px;
+  position: relative;
+  overflow: hidden;
+}
+
+.arch-layer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 0;
+}
+
+.arch-layer-line {
+  flex-shrink: 0;
+  width: 4px;
+  height: 100%;
+  min-height: 28px;
+  border-radius: 4px;
+}
+
+.arch-layer-line.cli { background: var(--accent); }
+.arch-layer-line.core { background: var(--purple); }
+.arch-layer-line.channel { background: var(--green); }
+.arch-layer-line.security { background: var(--amber); }
+
+.arch-layer-content {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.arch-node {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.arch-node.cli {
+  background: rgba(59,130,246,0.1);
+  border: 1px solid rgba(59,130,246,0.2);
+  color: var(--accent-light);
+}
+
+.arch-node.core {
+  background: var(--purple-bg);
+  border: 1px solid rgba(168,85,247,0.2);
+  color: var(--purple);
+}
+
+.arch-node.channel {
+  background: var(--green-bg);
+  border: 1px solid rgba(34,197,94,0.2);
+  color: var(--green);
+}
+
+.arch-node.security {
+  background: var(--amber-bg);
+  border: 1px solid rgba(245,158,11,0.2);
+  color: var(--amber);
+}
+
+.arch-arrow {
+  text-align: center;
+  color: var(--gray-600);
+  font-size: 18px;
+  padding: 2px 0;
+}
+
+.arch-desc {
+  font-size: 14px;
+  color: var(--gray-400);
+  line-height: 1.7;
+}
+
+.arch-desc strong {
+  color: var(--gray-200);
+}
+
+/* ============================================================
+   SECTION: CI / AGENT INTEGRATION
+   ============================================================ */
+.integration-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 40px;
+}
+
+.integration-card {
+  background: var(--gray-900);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-md);
+  padding: 28px;
+  transition: border-color 0.2s;
+}
+
+.integration-card:hover {
+  border-color: var(--gray-600);
+}
+
+.integration-card .badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+}
+
+.badge-ci {
+  background: var(--cyan-bg);
+  color: var(--cyan);
+  border: 1px solid rgba(6,182,212,0.2);
+}
+
+.badge-agent {
+  background: var(--purple-bg);
+  color: var(--purple);
+  border: 1px solid rgba(168,85,247,0.2);
+}
+
+.integration-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--white);
+  margin-bottom: 10px;
+}
+
+.integration-card p {
+  font-size: 14px;
+  color: var(--gray-400);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.integration-card .code-snip {
+  background: var(--gray-950);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--gray-300);
+  overflow-x: auto;
+}
+
+/* ============================================================
+   SECTION: EXIT CODES
+   ============================================================ */
+.exit-table {
+  width: 100%;
+  margin-top: 32px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.exit-table th {
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 2px solid var(--gray-700);
+  color: var(--gray-400);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.exit-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--gray-800);
+  color: var(--gray-300);
+}
+
+.exit-table tr:hover td {
+  background: var(--gray-900);
+}
+
+.exit-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.exit-code.success { background: var(--green-bg); color: var(--green); }
+.exit-code.error { background: var(--red-bg); color: var(--red); }
+.exit-code.warn { background: var(--amber-bg); color: var(--amber); }
+.exit-code.info { background: var(--cyan-bg); color: var(--cyan); }
+
+/* ============================================================
+   SECTION: SECURITY BADGES
+   ============================================================ */
+.security-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.security-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: var(--gray-900);
+  border: 1px solid var(--gray-800);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--gray-300);
+}
+
+.security-item .icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.security-item .icon.shield { background: var(--green-bg); color: var(--green); }
+.security-item .icon.lock { background: var(--amber-bg); color: var(--amber); }
+.security-item .icon.eye { background: var(--cyan-bg); color: var(--cyan); }
+
+/* ============================================================
+   SECTION: TECH STACK
+   ============================================================ */
+.tech-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.tech-tag {
+  padding: 8px 16px;
+  background: var(--gray-900);
+  border: 1px solid var(--gray-800);
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-300);
+  transition: all 0.2s;
+}
+
+.tech-tag:hover {
+  border-color: var(--gray-600);
+  color: var(--white);
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+footer {
+  position: relative;
+  z-index: 1;
+  padding: 60px 0 40px;
+  border-top: 1px solid var(--gray-800);
+}
+
+.footer-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 48px;
+}
+
+.footer-brand p {
+  font-size: 14px;
+  color: var(--gray-500);
+  margin-top: 12px;
+  max-width: 340px;
+  line-height: 1.6;
+}
+
+.footer-col h4 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gray-500);
+  margin-bottom: 16px;
+}
+
+.footer-col a {
+  display: block;
+  color: var(--gray-400);
+  text-decoration: none;
+  font-size: 14px;
+  padding: 4px 0;
+  transition: color 0.2s;
+}
+
+.footer-col a:hover { color: var(--white); }
+
+.footer-bottom {
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--gray-800);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.footer-links {
+  display: flex;
+  gap: 20px;
+}
+
+.footer-links a {
+  color: var(--gray-500);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.footer-links a:hover { color: var(--gray-300); }
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 900px) {
+  .split-grid,
+  .arch-grid,
+  .code-showcase,
+  .integration-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .channel-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .security-list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .footer-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .hero-stats {
+    gap: 24px;
+  }
+
+  .nav-links li:not(:last-child) { display: none; }
+}
+
+@media (max-width: 600px) {
+  .feature-grid,
+  .channel-grid,
+  .security-list {
+    grid-template-columns: 1fr;
+  }
+
+  .footer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    padding: 60px 0 40px;
+  }
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.hero > *,
+.section > .container > * {
+  animation: fadeInUp 0.6s ease-out both;
+}
+
+.hero > :nth-child(1) { animation-delay: 0s; }
+.hero > :nth-child(2) { animation-delay: 0.1s; }
+.hero > :nth-child(3) { animation-delay: 0.2s; }
+.hero > :nth-child(4) { animation-delay: 0.3s; }
+.hero > :nth-child(5) { animation-delay: 0.4s; }
+.hero > :nth-child(6) { animation-delay: 0.5s; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- Background -->
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+
+<!-- ============================================================
+     NAV
+     ============================================================ -->
+<nav>
+  <div class="container">
+    <a href="#" class="nav-brand">
+      <span class="nav-brand-icon">A</span>
+      apkpub
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features">功能</a></li>
+      <li><a href="#channels">渠道</a></li>
+      <li><a href="#quickstart">快速开始</a></li>
+      <li><a href="#architecture">架构</a></li>
+      <li><a href="https://github.com/ChenLiheng/apkpub-cli" target="_blank" style="display:flex;align-items:center;gap:4px;">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <li><a href="https://www.npmjs.com/package/apkpub-cli" target="_blank" class="nav-cta">npm install →</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ============================================================
+     HERO
+     ============================================================ -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">
+      <span>✦</span> v1.0.0 · Apache 2.0
+    </div>
+    <h1>
+      一条命令<br>
+      <span class="highlight">分发到所有应用市场</span>
+    </h1>
+    <p>
+      apkpub-cli 是一个面向开发者的 APK 多市场分发工具。<br>
+      一条命令将已签名 APK 发布到华为、小米、OPPO、VIVO、荣耀及自定义渠道。
+    </p>
+    <div class="hero-actions">
+      <a href="https://www.npmjs.com/package/apkpub-cli" target="_blank" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        npm install apkpub-cli
+      </a>
+      <a href="#quickstart" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        快速开始
+      </a>
+    </div>
+
+    <div class="hero-demo">
+      <div class="demo-header">
+        <span class="demo-dot"></span>
+        <span class="demo-dot"></span>
+        <span class="demo-dot"></span>
+        <span class="demo-title">terminal</span>
+      </div>
+      <div class="demo-body">
+<pre><span class="comment"># 一键发布到华为 + 小米</span>
+$ <span class="cmd">apkpub</span> <span class="key">publish</span> <span class="op">--app</span> <span class="str">com.example.app</span> <span class="op">--apk</span> <span class="str">./app-release.apk</span> \
+  <span class="op">--channels</span> <span class="str">huawei,mi</span> <span class="op">--desc</span> <span class="str">"版本 2.1.0 更新"</span> <span class="op">--yes</span>
+
+<span class="dim">  ◐ 正在解析 APK 元数据...</span>
+<span class="dim">  ◐ 华为: 查询线上版本...</span>
+<span class="dim">  ◐ 小米: 查询线上版本...</span>
+<span class="str">  ✔ 华为: 上传成功 (v210 → v215)</span>
+<span class="str">  ✔ 小米: 上传成功 (v210 → v215)</span>
+<span class="comment">  ────────────────────────</span>
+<span class="dim">  ✓ 2/2 渠道成功    退出码: 0</span></pre>
+      </div>
+    </div>
+
+    <div class="hero-stats">
+      <div class="stat-item">
+        <div class="stat-value">5+</div>
+        <div class="stat-label">内置市场渠道</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">3</div>
+        <div class="stat-label">调用方模式</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">4</div>
+        <div class="stat-label">MCP 工具</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">∞</div>
+        <div class="stat-label">自定义渠道</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: PROBLEM / SOLUTION
+     ============================================================ -->
+<section class="section section-alt" id="problem">
+  <div class="container">
+    <div class="split-grid">
+      <div>
+        <div class="section-label">痛点</div>
+        <div class="problem-card">
+          <h3>APK 分发很痛苦</h3>
+          <ul>
+            <li>每个应用市场有各自的上传 API 和签名算法</li>
+            <li>手动上传耗时且易出错，重复劳动</li>
+            <li>CI/CD 流程中难以集成多渠道发布</li>
+            <li>密钥和凭证散落在各处，缺少统一管理</li>
+            <li>审核状态需要逐个平台登录查看</li>
+            <li>AI Agent 无法直接操作应用市场</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="section-label">方案</div>
+        <div class="solution-card">
+          <h3>一条命令搞定一切</h3>
+          <ul>
+            <li>统一 CLI 接口屏蔽各平台 API 差异</li>
+            <li>多渠道并行上传，支持预检模式</li>
+            <li>原生 CI/CD 集成，管道安全可解析</li>
+            <li>分层密钥管理：环境变量 → keychain → 加密文件</li>
+            <li>市场状态一键查询，审核动态一目了然</li>
+            <li>内置 MCP Server，AI Agent 无缝调用</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: FEATURES
+     ============================================================ -->
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-label">功能特性</div>
+    <h2 class="section-title">为工程化而设计</h2>
+    <p class="section-desc">同时面向本地开发者、CI/CD 流水线和 AI Agent 三种使用场景。</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon blue">📦</div>
+        <h3>多市场分发</h3>
+        <p>同时发布到华为、小米、OPPO、VIVO、荣耀等应用市场，并行上传、进度可见、逐一报错互不影响。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">🔐</div>
+        <h3>分层密钥管理</h3>
+        <p>环境变量 &gt; 系统 Keychain &gt; AES-256-GCM 加密 &gt; 明文，灵活且安全。自动脱敏日志与输出。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon purple">🤖</div>
+        <h3>MCP / Agent 集成</h3>
+        <p>内置 MCP Server（stdio），暴露 info / status / publish / doctor 四个工具。Cursor、Claude 等 Agent 直接调用。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon amber">⚡</div>
+        <h3>CI/CD 原生支持</h3>
+        <p>非交互模式、<code style="font-family:var(--font-mono);font-size:12px;">--json</code> 机器可读输出、稳定退出码契约，GitHub Actions 等一键集成。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon cyan">🔄</div>
+        <h3>自定义上传渠道</h3>
+        <p>支持阿里云 OSS（AK/SK 或 STS）和通用 HTTP 上传。模板化路径、CDN 回源，灵活适配私有分发链路。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon red">🛡️</div>
+        <h3>安全默认值</h3>
+        <p>SSRF 防护、路径穿越防护、配置目录 0700 / 文件 0600、日志脱敏、输出分流（JSON→stdout，日志→stderr）。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: MARKET CHANNELS
+     ============================================================ -->
+<section class="section section-alt" id="channels">
+  <div class="container">
+    <div class="section-label">支持渠道</div>
+    <h2 class="section-title">五大应用市场</h2>
+    <p class="section-desc">内置主流国产 Android 应用市场渠道，开箱即用。</p>
+
+    <div class="channel-grid">
+      <div class="channel-card">
+        <span class="icon">🌺</span>
+        <div class="name">华为</div>
+        <div class="tag">huawei</div>
+      </div>
+      <div class="channel-card">
+        <span class="icon">🏆</span>
+        <div class="name">荣耀</div>
+        <div class="tag">honor</div>
+      </div>
+      <div class="channel-card">
+        <span class="icon">🐟</span>
+        <div class="name">小米</div>
+        <div class="tag">mi</div>
+      </div>
+      <div class="channel-card">
+        <span class="icon">🟢</span>
+        <div class="name">OPPO</div>
+        <div class="tag">oppo</div>
+      </div>
+      <div class="channel-card">
+        <span class="icon">💜</span>
+        <div class="name">VIVO</div>
+        <div class="tag">vivo</div>
+      </div>
+    </div>
+
+    <div class="custom-channel-note">
+      <strong>＋ 自定义渠道：</strong> 阿里云 OSS（AK/SK / STS） · 通用 HTTP（PUT / POST） · 模板路径 · CDN 回源 —— 无所不达
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: QUICKSTART
+     ============================================================ -->
+<section class="section" id="quickstart">
+  <div class="container">
+    <div class="section-label">快速开始</div>
+    <h2 class="section-title">30 秒上手</h2>
+    <p class="section-desc">安装、配置、发布，三步走完。</p>
+
+    <div class="code-showcase">
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="label">安装</span>
+          <span class="copy-indicator">#1</span>
+        </div>
+        <div class="code-body">
+<pre>$ <span class="kw">npm</span> i <span class="op">-g</span> apkpub-cli
+<span class="cm"># 或</span>
+$ <span class="kw">pnpm</span> i <span class="op">-g</span> apkpub-cli</pre>
+        </div>
+      </div>
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="label">初始化配置</span>
+          <span class="copy-indicator">#2</span>
+        </div>
+        <div class="code-body">
+<pre>$ <span class="kw">apkpub</span> <span class="fn">init</span>
+<span class="cm"># 交互式向导，自动创建</span>
+<span class="cm"># ~/.apkpub/apps/{appId}.json</span>
+
+$ <span class="kw">apkpub</span> <span class="fn">init</span> \
+    <span class="op">--name</span> <span class="st">"我的应用"</span> \
+    <span class="op">--app</span> <span class="st">com.example.app</span> \
+    <span class="op">--channels</span> <span class="st">huawei,mi</span></pre>
+        </div>
+      </div>
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="label">查询市场状态</span>
+          <span class="copy-indicator">#3</span>
+        </div>
+        <div class="code-body">
+<pre>$ <span class="kw">apkpub</span> <span class="fn">status</span> <span class="op">--app</span> <span class="st">com.example.app</span>
+<span class="kw">华为</span>  <span class="st">✔ 已上线</span>  v215
+<span class="kw">小米</span>  <span class="st">✔ 已上线</span>  v210
+<span class="kw">OPPO</span>  <span class="st">◐ 审核中</span>  v215
+
+$ <span class="kw">apkpub</span> <span class="fn">status</span> \
+    <span class="op">--app</span> <span class="st">com.example.app</span> <span class="op">--json</span></pre>
+        </div>
+      </div>
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="label">发布 APK</span>
+          <span class="copy-indicator">#4</span>
+        </div>
+        <div class="code-body">
+<pre><span class="cm"># 单包发布</span>
+$ <span class="kw">apkpub</span> <span class="fn">publish</span> <span class="op">--app</span> <span class="st">com.example.app</span> \
+    <span class="op">--apk</span> <span class="st">./app-release.apk</span> \
+    <span class="op">--channels</span> <span class="st">huawei,mi,oppo</span> \
+    <span class="op">--desc</span> <span class="st">"版本更新"</span> <span class="op">--yes</span>
+
+<span class="cm"># 预检模式（不上传）</span>
+$ <span class="kw">apkpub</span> <span class="fn">publish</span> <span class="op">--app</span> <span class="st">com.example.app</span> \
+    <span class="op">--apk</span> <span class="st">./app.apk</span> <span class="op">--dry-run</span> <span class="op">--json</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: ARCHITECTURE
+     ============================================================ -->
+<section class="section section-alt" id="architecture">
+  <div class="container">
+    <div class="section-label">架构设计</div>
+    <h2 class="section-title">分层 · 扩展 · 安全</h2>
+
+    <div class="arch-grid">
+      <div>
+        <div class="arch-diagram">
+          <div class="arch-layer">
+            <div class="arch-layer-line cli"></div>
+            <div class="arch-layer-content">
+              <span class="arch-node cli">bin/apkpub.ts</span>
+              <span class="arch-node cli">cli/init</span>
+              <span class="arch-node cli">cli/publish</span>
+              <span class="arch-node cli">cli/status</span>
+              <span class="arch-node cli">cli/doctor</span>
+              <span class="arch-node cli">cli/config</span>
+              <span class="arch-node cli">mcp/server</span>
+              <span class="arch-node cli">cli/describe</span>
+            </div>
+          </div>
+          <div class="arch-arrow">↓ CLI 编排</div>
+          <div class="arch-layer">
+            <div class="arch-layer-line core"></div>
+            <div class="arch-layer-content">
+              <span class="arch-node core">Dispatcher</span>
+              <span class="arch-node core">TaskLauncher</span>
+              <span class="arch-node core">versionCheck</span>
+              <span class="arch-node core">result</span>
+            </div>
+          </div>
+          <div class="arch-arrow">↓ Channel 接口契约</div>
+          <div class="arch-layer">
+            <div class="arch-layer-line channel"></div>
+            <div class="arch-layer-content">
+              <span class="arch-node channel">huawei</span>
+              <span class="arch-node channel">honor</span>
+              <span class="arch-node channel">mi</span>
+              <span class="arch-node channel">oppo</span>
+              <span class="arch-node channel">vivo</span>
+              <span class="arch-node channel">oss</span>
+              <span class="arch-node channel">http</span>
+            </div>
+          </div>
+          <div class="arch-arrow">↓ 安全隔离</div>
+          <div class="arch-layer">
+            <div class="arch-layer-line security"></div>
+            <div class="arch-layer-content">
+              <span class="arch-node security">assertSafeUrl</span>
+              <span class="arch-node security">sanitizePath</span>
+              <span class="arch-node security">redactMessage</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="arch-desc">
+          <p><strong>清晰的分层架构</strong> — CLI 薄层只做参数解析与输出，核心编排层通过 <code>Channel</code> 接口驱动渠道实现，新增渠道只需实现统一契约。</p>
+          <br>
+          <p><strong>publish 核心数据流</strong>：</p>
+          <p style="font-size:13px;font-family:var(--font-mono);color:var(--gray-300);line-height:1.8;margin-top:8px;">
+            loadConfig(appId)<br>
+            <span style="color:var(--gray-500);">→ resolveChannels</span><br>
+            <span style="color:var(--gray-500);">→ Dispatcher.dispatch()</span><br>
+            <span style="color:var(--gray-500);">&nbsp;&nbsp;└─ TaskLauncher.prepare()</span><br>
+            <span style="color:var(--gray-500);">&nbsp;&nbsp;&nbsp;&nbsp; ├─ resolveConfigSecrets</span><br>
+            <span style="color:var(--gray-500);">&nbsp;&nbsp;&nbsp;&nbsp; ├─ selectFile + parseApk</span><br>
+            <span style="color:var(--gray-500);">&nbsp;&nbsp;&nbsp;&nbsp; ├─ checkPackageMatch</span><br>
+            <span style="color:var(--gray-500);">&nbsp;&nbsp;&nbsp;&nbsp; ├─ getMarketState + checkVersion</span><br>
+            <span style="color:var(--gray-500);">&nbsp;&nbsp;&nbsp;&nbsp; └─ channel.upload()</span><br>
+            <span style="color:var(--gray-500);">→ aggregateResults → exitCode</span>
+          </p>
+          <br>
+          <p><strong>渠道隔离</strong> — 单渠道失败不影响其他渠道，每个渠道独立 try/catch。最终退出码精确反映结果（0=全成功 / 4=部分失败 / 5=全失败）。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: CI / AGENT INTEGRATION
+     ============================================================ -->
+<section class="section" id="integration">
+  <div class="container">
+    <div class="section-label">集成</div>
+    <h2 class="section-title">CI/CD & AI Agent 双通道</h2>
+    <p class="section-desc">无论你喜欢 YAML 还是自然语言，apkpub 都准备好了。</p>
+
+    <div class="integration-grid">
+      <div class="integration-card">
+        <span class="badge badge-ci">CI/CD</span>
+        <h3>GitHub Actions 集成</h3>
+        <p>非交互模式 + <code>--json</code> + <code>--no-progress</code>，管道安全。退出码精确反映发布结果。</p>
+        <div class="code-snip">
+- <span class="kw">name:</span> <span class="st">发布 APK</span>
+  <span class="kw">env:</span>
+    <span class="ty">HUAWEI_CLIENT_SECRET</span>: <span class="st">${{ secrets.HUAWEI_CLIENT_SECRET }}</span>
+    <span class="ty">MI_PRIVATE_KEY</span>: <span class="st">${{ secrets.MI_PRIVATE_KEY }}</span>
+  <span class="kw">run:</span> <span class="op">|</span>
+    <span class="kw">apkpub</span> <span class="fn">publish</span> \
+      <span class="op">--app</span> <span class="st">com.example.app</span> \
+      <span class="op">--apk</span> <span class="st">./build/outputs/apk/release/</span> \
+      <span class="op">--channels</span> <span class="st">huawei,mi</span> \
+      <span class="op">--desc</span> <span class="st">"CI 自动发布"</span> \
+      <span class="op">--yes --json --no-progress</span>
+        </div>
+      </div>
+      <div class="integration-card">
+        <span class="badge badge-agent">AI Agent</span>
+        <h3>MCP Server 集成</h3>
+        <p>以 stdio 启动 MCP Server，暴露 4 个工具供 AI Agent 调用。Cursor、Claude 等工具开箱即用。</p>
+        <div class="code-snip">
+<span class="cm">// Cursor MCP 配置</span>
+{
+  <span class="st">"mcpServers"</span>: {
+    <span class="st">"apkpub"</span>: {
+      <span class="st">"command"</span>: <span class="st">"apkpub"</span>,
+      <span class="st">"args"</span>: [<span class="st">"mcp"</span>]
+    }
+  }
+}
+        </div>
+        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;">
+          <span style="padding:3px 10px;background:var(--purple-bg);border:1px solid rgba(168,85,247,0.2);border-radius:6px;font-size:12px;font-family:var(--font-mono);color:var(--purple);">apkpub_info</span>
+          <span style="padding:3px 10px;background:var(--purple-bg);border:1px solid rgba(168,85,247,0.2);border-radius:6px;font-size:12px;font-family:var(--font-mono);color:var(--purple);">apkpub_status</span>
+          <span style="padding:3px 10px;background:var(--purple-bg);border:1px solid rgba(168,85,247,0.2);border-radius:6px;font-size:12px;font-family:var(--font-mono);color:var(--purple);">apkpub_publish</span>
+          <span style="padding:3px 10px;background:var(--purple-bg);border:1px solid rgba(168,85,247,0.2);border-radius:6px;font-size:12px;font-family:var(--font-mono);color:var(--purple);">apkpub_doctor</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: EXIT CODES
+     ============================================================ -->
+<section class="section section-alt" id="errors">
+  <div class="container">
+    <div class="section-label">契约</div>
+    <h2 class="section-title">稳定退出码</h2>
+    <p class="section-desc">发布结果通过退出码精确表达，CI/CD 和 Agent 可安全解析。</p>
+
+    <table class="exit-table">
+      <thead>
+        <tr>
+          <th>退出码</th>
+          <th>含义</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="exit-code success">0</span></td>
+          <td>全部成功</td>
+          <td>所有渠道上传完成</td>
+        </tr>
+        <tr>
+          <td><span class="exit-code error">1</span></td>
+          <td>内部错误</td>
+          <td>非预期的运行时异常</td>
+        </tr>
+        <tr>
+          <td><span class="exit-code error">2</span></td>
+          <td>参数/配置错误</td>
+          <td>CLI 参数无效或配置文件损坏</td>
+        </tr>
+        <tr>
+          <td><span class="exit-code warn">3</span></td>
+          <td>版本校验失败</td>
+          <td>全部渠道因 versionCode 过低失败</td>
+        </tr>
+        <tr>
+          <td><span class="exit-code warn">4</span></td>
+          <td>部分渠道失败</td>
+          <td>至少一个渠道上传成功，至少一个失败</td>
+        </tr>
+        <tr>
+          <td><span class="exit-code error">5</span></td>
+          <td>全部失败</td>
+          <td>所有渠道均上传失败</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: SECURITY
+     ============================================================ -->
+<section class="section" id="security">
+  <div class="container">
+    <div class="section-label">安全</div>
+    <h2 class="section-title">安全内置，无妥协</h2>
+    <p class="section-desc">处理市场凭证等敏感信息，apkpub 在每一层都做了防护。</p>
+
+    <div class="security-list">
+      <div class="security-item">
+        <span class="icon shield">🔒</span>
+        <span><strong>配置权限</strong><br><span style="font-size:12px;color:var(--gray-500);">~/.apkpub/ 目录 0700，配置文件 0600</span></span>
+      </div>
+      <div class="security-item">
+        <span class="icon lock">🔑</span>
+        <span><strong>密钥加密</strong><br><span style="font-size:12px;color:var(--gray-500);">AES-256-GCM + scrypt，环境变量优先</span></span>
+      </div>
+      <div class="security-item">
+        <span class="icon eye">👁️</span>
+        <span><strong>日志脱敏</strong><br><span style="font-size:12px;color:var(--gray-500);">secret/token/privateKey 自动 ***REDACTED***</span></span>
+      </div>
+      <div class="security-item">
+        <span class="icon shield">🛡️</span>
+        <span><strong>SSRF 防护</strong><br><span style="font-size:12px;color:var(--gray-500);">禁止内网地址，仅允许 http/https</span></span>
+      </div>
+      <div class="security-item">
+        <span class="icon lock">🔗</span>
+        <span><strong>路径穿越防护</strong><br><span style="font-size:12px;color:var(--gray-500);">禁止 .. 与绝对路径</span></span>
+      </div>
+      <div class="security-item">
+        <span class="icon eye">📤</span>
+        <span><strong>输出分流</strong><br><span style="font-size:12px;color:var(--gray-500);">JSON→stdout，日志→stderr，管道安全</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION: TECH STACK
+     ============================================================ -->
+<section class="section section-alt" id="tech">
+  <div class="container">
+    <div class="section-label">技术栈</div>
+    <h2 class="section-title">TypeScript · ESM · 模块化</h2>
+    <p class="section-desc">纯 TypeScript 项目，严格类型安全，向模块化设计倾斜。</p>
+
+    <div class="tech-stack">
+      <span class="tech-tag">TypeScript 5.8</span>
+      <span class="tech-tag">Node.js ≥18</span>
+      <span class="tech-tag">Pure ESM</span>
+      <span class="tech-tag">pnpm 10</span>
+      <span class="tech-tag">tsup 打包</span>
+      <span class="tech-tag">Commander</span>
+      <span class="tech-tag">Zod 校验</span>
+      <span class="tech-tag">vitest 测试</span>
+      <span class="tech-tag">nock mock</span>
+      <span class="tech-tag">MCP SDK</span>
+      <span class="tech-tag">@inquirer/prompts</span>
+      <span class="tech-tag">cli-progress</span>
+      <span class="tech-tag">cli-table3</span>
+      <span class="tech-tag">p-limit 并发</span>
+      <span class="tech-tag">ali-oss</span>
+      <span class="tech-tag">Apache 2.0</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     FOOTER
+     ============================================================ -->
+<footer>
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="#" class="nav-brand" style="display:inline-flex;">
+          <span class="nav-brand-icon">A</span>
+          apkpub
+        </a>
+        <p>APK 多市场分发命令行工具 —— 一条命令，分发全渠道。</p>
+      </div>
+      <div class="footer-col">
+        <h4>资源</h4>
+        <a href="https://github.com/ChenLiheng/apkpub-cli">GitHub</a>
+        <a href="https://www.npmjs.com/package/apkpub-cli">npm</a>
+        <a href="https://github.com/ChenLiheng/apkpub-cli/releases">Release Notes</a>
+      </div>
+      <div class="footer-col">
+        <h4>文档</h4>
+        <a href="#quickstart">快速开始</a>
+        <a href="#features">功能特性</a>
+        <a href="#architecture">架构设计</a>
+        <a href="https://github.com/ChenLiheng/apkpub-cli/blob/main/SECURITY.md">安全策略</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 apkpub-cli 项目 · Apache 2.0 许可证</span>
+      <div class="footer-links">
+        <a href="https://github.com/ChenLiheng/apkpub-cli/blob/main/CONTRIBUTING.md">贡献指南</a>
+        <a href="https://github.com/ChenLiheng/apkpub-cli/blob/main/CODE_OF_CONDUCT.md">行为准则</a>
+        <a href="https://github.com/ChenLiheng/apkpub-cli/blob/main/SECURITY.md">报告漏洞</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
