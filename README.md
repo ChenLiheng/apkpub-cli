@@ -180,6 +180,23 @@ apkpub mcp
 
 MCP 暴露工具：`apkpub_info`、`apkpub_status`、`apkpub_publish`、`apkpub_doctor`
 
+#### Agent Skill 自动同步
+
+安装本包时（`postinstall`）会自动把内置 skill `using-apkpub-cli`（指导 Agent 如何调用 apkpub）同步到已检测到的 Agent skills 目录：`~/.agents/skills/`、`~/.cursor/skills/`、`~/.hermes/skills/`、`~/.claude/skills/`（仅当对应配置目录存在时安装）。
+
+```bash
+# 手动重新同步
+node node_modules/apkpub-cli/scripts/install-skill.mjs
+# 或在本仓库内
+pnpm install-skill
+```
+
+可用环境变量控制：
+
+- `APKPUB_SKIP_SKILL_INSTALL=1`：跳过同步。
+- `APKPUB_FORCE_SKILL_INSTALL=1`：为所有目标强制创建目录并安装。
+- `APKPUB_SKILL_DIRS=/path/a,/path/b`：追加自定义安装根目录。
+
 ### Cursor MCP 配置示例
 
 ```json
