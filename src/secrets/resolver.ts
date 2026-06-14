@@ -2,6 +2,13 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync }
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { logger } from '../utils/logger.js';
 
+const SALT = 'apkpub-salt';
+const KEY_LENGTH = 32;
+
+function deriveKey(masterKey: string, salt: string): Buffer {
+  return scryptSync(masterKey, salt, KEY_LENGTH);
+}
+
 const ENV_PLACEHOLDER_RE = /^\$\{([A-Z_][A-Z0-9_]*)\}$/;
 
 export type SecretSource = 'env' | 'keychain' | 'encrypted' | 'plain';
@@ -51,16 +58,17 @@ export async function resolveConfigSecrets(
   params: Record<string, string>,
   options: ResolveOptions = {},
 ): Promise<Record<string, string>> {
-  const result: Record<string, string> = {};
-  for (const [key, val] of Object.entries(params)) {
-    if (typeof val === 'string' && val.length > 0) {
-      const resolved = await resolveSecret(val, { ...options, account: key });
-      result[key] = resolved.value;
-    } else {
-      result[key] = val;
-    }
-  }
-  return result;
+  const entries = Object.entries(params);
+  const resolved = await Promise.all(
+    entries.map(async ([key, val]) => {
+      if (typeof val === 'string' && val.length > 0) {
+        const result = await resolveSecret(val, { ...options, account: key });
+        return [key, result.value] as const;
+      }
+      return [key, val] as const;
+    }),
+  );
+  return Object.fromEntries(resolved);
 }
 
 async function resolveFromKeychain(service: string, account: string): Promise<string> {
@@ -95,15 +103,24 @@ async function decryptValue(encrypted: string): Promise<string> {
       retryable: false,
     });
   }
-  const [ivHex, authTagHex, cipherHex] = encrypted.split(':');
-  if (!ivHex || !authTagHex || !cipherHex) {
+  const parts = encrypted.split(':');
+  let salt: string;
+  let ivHex: string;
+  let authTagHex: string;
+  let cipherHex: string;
+  if (parts[0] === 'v2' && parts.length === 5) {
+    [, salt, ivHex, authTagHex, cipherHex] = parts;
+  } else if (parts.length === 3) {
+    [ivHex, authTagHex, cipherHex] = parts;
+    salt = SALT;
+  } else {
     throw new ApkpubError({
       code: ErrorCode.SECRET_RESOLVE_FAILED,
       message: '加密值格式无效',
       retryable: false,
     });
   }
-  const key = scryptSync(masterKey, 'apkpub-salt', 32);
+  const key = deriveKey(masterKey, salt!);
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
   decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
   const decrypted = Buffer.concat([
@@ -126,12 +143,13 @@ export async function storeInKeychain(service: string, account: string, password
 
 /** 生成加密后的密钥值（用于配置文件） */
 export function encryptValue(plaintext: string, masterKey: string): string {
-  const key = scryptSync(masterKey, 'apkpub-salt', 32);
+  const salt = randomBytes(16).toString('hex');
+  const key = deriveKey(masterKey, salt);
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  return `enc:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+  return `enc:v2:${salt}:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
 /** 配置文件权限校验 */

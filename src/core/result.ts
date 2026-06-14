@@ -42,9 +42,14 @@ export enum ExitCode {
 }
 
 export function aggregateResults(results: ChannelResult[], dryRun = false): PublishResult {
-  const success = results.filter((r) => r.status === 'success' || r.status === 'dry_run').length;
-  const failed = results.filter((r) => r.status === 'failed').length;
-  const skipped = results.filter((r) => r.status === 'skipped').length;
+  let success = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const r of results) {
+    if (r.status === 'success' || r.status === 'dry_run') success++;
+    else if (r.status === 'failed') failed++;
+    else if (r.status === 'skipped') skipped++;
+  }
   const ok = failed === 0;
   return {
     ok,

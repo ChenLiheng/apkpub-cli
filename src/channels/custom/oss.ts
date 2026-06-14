@@ -20,7 +20,7 @@ async function fetchStsToken(
   signKey: string,
   contextB: string,
 ): Promise<StsToken> {
-  assertSafeUrl(stsTokenUrl, 'STS Token URL');
+  assertSafeUrl(stsTokenUrl, 'STS Token URL', { allowHttp: true });
   const sign = md5Sign(contextB, signKey);
   const client = createHttpClient();
   const response = await client.post(

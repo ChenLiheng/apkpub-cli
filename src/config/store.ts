@@ -91,17 +91,20 @@ export async function listConfigs(debug = false): Promise<AppConfig[]> {
   } catch {
     return [];
   }
-  const configs: AppConfig[] = [];
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    try {
-      const content = await readFile(path.join(dir, file), 'utf8');
-      configs.push(migrateConfig(JSON.parse(content)));
-    } catch (err) {
-      logger.warn('config', `跳过无效配置 ${file}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  return configs;
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file) => {
+        try {
+          const content = await readFile(path.join(dir, file), 'utf8');
+          return migrateConfig(JSON.parse(content));
+        } catch (err) {
+          logger.warn('config', `跳过无效配置 ${file}: ${err instanceof Error ? err.message : String(err)}`);
+          return null;
+        }
+      }),
+  );
+  return results.filter((c): c is AppConfig => c !== null);
 }
 
 /** 导入配置 */

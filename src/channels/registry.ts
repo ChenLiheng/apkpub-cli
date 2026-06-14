@@ -25,14 +25,14 @@ export function getBuiltinChannels(): Channel[] {
 /** 从应用配置加载全部渠道（内置 + 自定义） */
 export function loadChannelsFromConfig(appConfig: AppConfig): Channel[] {
   const channels: Channel[] = [];
-  const builtinNames = new Set(BUILTIN_MARKET_CHANNELS.map((c) => c.name));
+  const builtinMap = new Map(BUILTIN_MARKET_CHANNELS.map((c) => [c.name, c]));
 
   for (const chConfig of appConfig.channels) {
     if (!chConfig.enable) continue;
     if (chConfig.type === 'custom') {
       channels.push(createCustomChannel(chConfig));
-    } else if (builtinNames.has(chConfig.name)) {
-      const builtin = BUILTIN_MARKET_CHANNELS.find((c) => c.name === chConfig.name);
+    } else {
+      const builtin = builtinMap.get(chConfig.name);
       if (builtin) channels.push(builtin);
     }
   }

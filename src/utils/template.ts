@@ -12,14 +12,14 @@ const PLACEHOLDER_RE = /\{(\w+)\}/g;
 
 /** 渲染模板占位符 */
 export function renderTemplate(template: string, ctx: TemplateContext): string {
+  const map: Record<string, string | number> = {
+    appId: ctx.appId,
+    versionName: ctx.versionName,
+    versionCode: ctx.versionCode,
+    fileName: ctx.fileName,
+    objectKey: ctx.objectKey ?? '',
+  };
   const rendered = template.replace(PLACEHOLDER_RE, (_, key: string) => {
-    const map: Record<string, string | number> = {
-      appId: ctx.appId,
-      versionName: ctx.versionName,
-      versionCode: ctx.versionCode,
-      fileName: ctx.fileName,
-      objectKey: ctx.objectKey ?? '',
-    };
     const value = map[key];
     if (value === undefined) return `{${key}}`;
     return String(value);

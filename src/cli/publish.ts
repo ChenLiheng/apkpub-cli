@@ -7,6 +7,22 @@ import { printJson, printPublishResult, isInteractive } from '../utils/output.js
 import { setJsonMode } from '../utils/logger.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 
+function getErrorExitCode(err: ApkpubError): ExitCode {
+  switch (err.code) {
+    case ErrorCode.VERSION_TOO_LOW:
+      return ExitCode.VERSION_CHECK_FAILED;
+    case ErrorCode.INVALID_ARGUMENT:
+    case ErrorCode.CONFIG_NOT_FOUND:
+    case ErrorCode.CONFIG_INVALID:
+    case ErrorCode.APK_NOT_FOUND:
+    case ErrorCode.APK_AMBIGUOUS:
+    case ErrorCode.CHANNEL_NOT_FOUND:
+      return ExitCode.INVALID_ARGUMENT;
+    default:
+      return ExitCode.INTERNAL;
+  }
+}
+
 export function registerPublishCommand(program: Command): void {
   program
     .command('publish')
@@ -86,7 +102,7 @@ export function registerPublishCommand(program: Command): void {
         } else {
           process.stderr.write(`错误: ${apkErr.message}\n`);
         }
-        process.exit(ExitCode.INVALID_ARGUMENT);
+        process.exit(getErrorExitCode(apkErr));
       }
     });
 }

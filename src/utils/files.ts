@@ -26,15 +26,14 @@ async function hashFile(filePath: string, algorithm: 'md5' | 'sha256'): Promise<
 /** 列出目录下所有 APK 文件 */
 export async function listApkFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir);
-  const apks: string[] = [];
-  for (const entry of entries) {
-    const full = path.join(dir, entry);
-    const info = await stat(full);
-    if (info.isFile() && entry.toLowerCase().endsWith('.apk')) {
-      apks.push(full);
-    }
-  }
-  return apks;
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      const full = path.join(dir, entry);
+      const info = await stat(full);
+      return info.isFile() && entry.toLowerCase().endsWith('.apk') ? full : null;
+    }),
+  );
+  return results.filter((f): f is string => f !== null);
 }
 
 /** 获取文件大小 */

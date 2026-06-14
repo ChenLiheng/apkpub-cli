@@ -12,6 +12,7 @@ import {
 } from './result.js';
 import { writeAuditLog } from '../config/store.js';
 import { logger } from '../utils/logger.js';
+import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 
 export interface DispatchOptions {
   appConfig: AppConfig;
@@ -69,6 +70,10 @@ export class Dispatcher {
             return { name: channel.name, label: channel.label, status: 'dry_run' };
           }
 
+          if (signal?.aborted) {
+            throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false });
+          }
+
           const result = await channel.upload({
             apkInfo,
             filePath: launcher.getFilePath(),
@@ -77,7 +82,7 @@ export class Dispatcher {
             onProgress: ({ step, percent }) => {
               options.onChannelProgress?.(channel.name, step, percent);
             },
-            signal: signal ?? new AbortController().signal,
+            signal: signal ?? AbortSignal.timeout(24 * 60 * 60 * 1000),
           });
 
           await writeAuditLog({

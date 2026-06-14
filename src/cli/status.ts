@@ -27,7 +27,11 @@ export function registerStatusCommand(program: Command): void {
             results.push({ name: channel.name, label: channel.label, state: 'n/a', error: '自定义渠道无市场状态' });
             continue;
           }
-          const chConfig = appConfig.channels.find((c) => c.name === channel.name)!;
+          const chConfig = appConfig.channels.find((c) => c.name === channel.name);
+          if (!chConfig) {
+            results.push({ name: channel.name, label: channel.label, error: `渠道 ${channel.name} 未在配置中启用` });
+            continue;
+          }
           try {
             const rawParams = TaskLauncher.getRawParams(chConfig);
             const resolved = await resolveConfigSecrets(rawParams);

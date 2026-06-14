@@ -12,8 +12,8 @@ const PRIVATE_IP_PATTERNS = [
   /^169\.254\./,
 ];
 
-/** 校验 URL 是否安全（HTTPS + 非内网） */
-export function assertSafeUrl(url: string, label = 'URL'): void {
+/** 校验 URL 是否安全（默认仅 HTTPS + 非内网） */
+export function assertSafeUrl(url: string, label = 'URL', options?: { allowHttp?: boolean }): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -28,6 +28,13 @@ export function assertSafeUrl(url: string, label = 'URL'): void {
     throw new ApkpubError({
       code: ErrorCode.SSRF_BLOCKED,
       message: `${label} 仅支持 http/https 协议`,
+      retryable: false,
+    });
+  }
+  if (parsed.protocol === 'http:' && !options?.allowHttp) {
+    throw new ApkpubError({
+      code: ErrorCode.SSRF_BLOCKED,
+      message: `${label} 不允许使用 HTTP 明文协议，请使用 HTTPS`,
       retryable: false,
     });
   }
@@ -93,7 +100,7 @@ export async function uploadWithProgress(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  assertSafeUrl(url, '上传地址');
+  assertSafeUrl(url, '上传地址', { allowHttp: true });
   const response = await client.request({
     method: config.method ?? 'PUT',
     url,

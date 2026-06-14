@@ -4,12 +4,25 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { parseApk } from '../apk/ApkParser.js';
 import { loadConfig } from '../config/store.js';
 import { Dispatcher } from '../core/Dispatcher.js';
 import { resolveChannels } from '../channels/registry.js';
 import { resolveConfigSecrets } from '../secrets/resolver.js';
 import { TaskLauncher } from '../core/TaskLauncher.js';
+
+const infoSchema = z.object({ apk: z.string().min(1) });
+const statusSchema = z.object({ app: z.string().min(1), channels: z.array(z.string()).optional() });
+const publishSchema = z.object({
+  app: z.string().min(1),
+  apk: z.string().min(1),
+  channels: z.array(z.string()).optional(),
+  desc: z.string().optional(),
+  dryRun: z.boolean().optional(),
+  parallel: z.number().int().positive().optional(),
+});
+const doctorSchema = z.object({ app: z.string().min(1) });
 
 /** 启动 MCP Server */
 export async function startMcpServer(): Promise<void> {
@@ -76,19 +89,25 @@ export async function startMcpServer(): Promise<void> {
     try {
       switch (name) {
         case 'apkpub_info': {
-          const info = await parseApk(params.apk as string);
+          const { apk } = infoSchema.parse(params);
+          const info = await parseApk(apk);
           return { content: [{ type: 'text', text: JSON.stringify(info) }] };
         }
         case 'apkpub_status': {
-          const appConfig = await loadConfig(params.app as string);
-          const channels = resolveChannels(appConfig, params.channels as string[] | undefined);
+          const { app, channels: channelNames } = statusSchema.parse(params);
+          const appConfig = await loadConfig(app);
+          const channels = resolveChannels(appConfig, channelNames);
           const results = [];
           for (const channel of channels) {
             if (!channel.getMarketState) {
               results.push({ channel: channel.name, state: 'n/a' });
               continue;
             }
-            const chConfig = appConfig.channels.find((c) => c.name === channel.name)!;
+            const chConfig = appConfig.channels.find((c) => c.name === channel.name);
+            if (!chConfig) {
+              results.push({ channel: channel.name, error: `渠道 ${channel.name} 未在配置中启用` });
+              continue;
+            }
             const rawParams = TaskLauncher.getRawParams(chConfig);
             const resolved = await resolveConfigSecrets(rawParams);
             const state = await channel.getMarketState(appConfig.applicationId, resolved);
@@ -97,25 +116,31 @@ export async function startMcpServer(): Promise<void> {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: true, results }) }] };
         }
         case 'apkpub_publish': {
-          const appConfig = await loadConfig(params.app as string);
-          const channels = resolveChannels(appConfig, params.channels as string[] | undefined);
+          const { app, apk, channels: channelNames, desc, dryRun, parallel } = publishSchema.parse(params);
+          const appConfig = await loadConfig(app);
+          const channels = resolveChannels(appConfig, channelNames);
           const dispatcher = new Dispatcher();
           const result = await dispatcher.dispatch({
             appConfig,
             channels,
-            apkPath: params.apk as string,
-            updateDesc: (params.desc as string) ?? appConfig.extension.updateDesc ?? '',
-            dryRun: params.dryRun as boolean | undefined,
-            parallel: (params.parallel as number) ?? 1,
+            apkPath: apk,
+            updateDesc: desc ?? appConfig.extension.updateDesc ?? '',
+            dryRun,
+            parallel: parallel ?? 1,
           });
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
         }
         case 'apkpub_doctor': {
-          const appConfig = await loadConfig(params.app as string);
+          const { app } = doctorSchema.parse(params);
+          const appConfig = await loadConfig(app);
           const channels = resolveChannels(appConfig);
           const checks = [];
           for (const channel of channels) {
-            const chConfig = appConfig.channels.find((c) => c.name === channel.name)!;
+            const chConfig = appConfig.channels.find((c) => c.name === channel.name);
+            if (!chConfig) {
+              checks.push({ channel: channel.name, ok: false, error: `渠道 ${channel.name} 未在配置中启用` });
+              continue;
+            }
             try {
               const rawParams = TaskLauncher.getRawParams(chConfig);
               const resolved = await resolveConfigSecrets(rawParams);

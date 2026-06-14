@@ -7,8 +7,17 @@ describe('assertSafeUrl', () => {
     expect(() => assertSafeUrl('https://example.com/upload')).not.toThrow();
   });
 
-  it('允许公网 http 地址', () => {
-    expect(() => assertSafeUrl('http://example.com/upload')).not.toThrow();
+  it('默认拒绝 HTTP 明文协议', () => {
+    try {
+      assertSafeUrl('http://example.com/upload');
+      expect.unreachable('应当抛出异常');
+    } catch (err) {
+      expect((err as ApkpubError).code).toBe(ErrorCode.SSRF_BLOCKED);
+    }
+  });
+
+  it('允许显式启用 HTTP', () => {
+    expect(() => assertSafeUrl('http://example.com/upload', 'URL', { allowHttp: true })).not.toThrow();
   });
 
   it('拒绝非法 URL', () => {

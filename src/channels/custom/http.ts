@@ -34,7 +34,7 @@ export async function uploadToHttp(ctx: UploadContext, config: CustomChannelConf
     objectKey,
   });
 
-  assertSafeUrl(uploadUrl, '上传地址');
+  assertSafeUrl(uploadUrl, '上传地址', { allowHttp: true });
   const client = createHttpClient({ timeout: 300_000 });
   const method = config.method ?? 'PUT';
 
@@ -56,13 +56,7 @@ export async function uploadToHttp(ctx: UploadContext, config: CustomChannelConf
         if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
       },
     });
-    if (response.status < 200 || response.status >= 300) {
-      throw new ApkpubError({
-        code: ErrorCode.CHANNEL_UPLOAD_FAILED,
-        message: `HTTP 上传失败: ${response.status}`,
-        retryable: response.status >= 500,
-      });
-    }
+    checkUploadResponse(response.status);
   } else {
     const form = new FormData();
     const field = config.formField ?? 'file';
@@ -75,13 +69,7 @@ export async function uploadToHttp(ctx: UploadContext, config: CustomChannelConf
         if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
       },
     });
-    if (response.status < 200 || response.status >= 300) {
-      throw new ApkpubError({
-        code: ErrorCode.CHANNEL_UPLOAD_FAILED,
-        message: `HTTP 上传失败: ${response.status}`,
-        retryable: response.status >= 500,
-      });
-    }
+    checkUploadResponse(response.status);
   }
 
   const downloadUrl = renderTemplate(config.downloadUrlTemplate, {
@@ -94,4 +82,14 @@ export async function uploadToHttp(ctx: UploadContext, config: CustomChannelConf
 
   ctx.onProgress({ step: 'done', percent: 100 });
   return { downloadUrl, message: '上传成功' };
+}
+
+function checkUploadResponse(status: number): void {
+  if (status < 200 || status >= 300) {
+    throw new ApkpubError({
+      code: ErrorCode.CHANNEL_UPLOAD_FAILED,
+      message: `HTTP 上传失败: ${status}`,
+      retryable: status >= 500,
+    });
+  }
 }

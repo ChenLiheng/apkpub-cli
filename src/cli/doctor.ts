@@ -22,7 +22,11 @@ export function registerDoctorCommand(program: Command): void {
         const checks: { channel: string; ok: boolean; message: string }[] = [];
 
         for (const channel of channels) {
-          const chConfig = appConfig.channels.find((c) => c.name === channel.name)!;
+          const chConfig = appConfig.channels.find((c) => c.name === channel.name);
+          if (!chConfig) {
+            checks.push({ channel: channel.name, ok: false, message: `渠道 ${channel.name} 未在配置中启用` });
+            continue;
+          }
           try {
             const rawParams = TaskLauncher.getRawParams(chConfig);
             const resolved = await resolveConfigSecrets(rawParams);

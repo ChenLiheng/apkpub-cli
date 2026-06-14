@@ -36,7 +36,7 @@ describe('resolveSecret', () => {
   it('加密/解密往返一致', async () => {
     process.env.APKPUB_MASTER_KEY = 'master-key-1234';
     const encrypted = encryptValue('my-secret', 'master-key-1234');
-    expect(encrypted.startsWith('enc:')).toBe(true);
+    expect(encrypted.startsWith('enc:v2:')).toBe(true);
     const result = await resolveSecret(encrypted);
     expect(result.value).toBe('my-secret');
     expect(result.source).toBe('encrypted');
