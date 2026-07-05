@@ -4,13 +4,13 @@
 
 | 版本 | 是否支持 |
 |------|----------|
-| 1.x | ✅ |
+| 0.x | ✅ |
 
 ## 报告漏洞
 
 如果你发现安全漏洞，请**不要**通过公开 Issue 提交。请通过以下方式私下联系维护者：
 
-- 通过 GitHub [Security Advisories](https://github.com/your-org/apkpub-cli/security/advisories/new) 私密上报
+- 通过 GitHub [Security Advisories](https://github.com/ChenLiheng/apkpub-cli/security/advisories/new) 私密上报
 
 我们会在收到报告后尽快响应，并在修复发布前与你协调披露时间。
 
@@ -22,7 +22,7 @@ apkpub-cli 处理应用市场凭证等敏感信息，已内置以下防护：
 - **输出脱敏**：日志、`--json` 输出与错误堆栈中的敏感字段会被自动过滤
 - **配置文件权限**：`~/.apkpub/` 目录 `0700`、配置文件 `0600`
 - **导出剥离密钥**：`config export` 默认移除敏感字段
-- **SSRF 防护**：自定义渠道的上传地址强制 HTTPS 并禁止指向内网地址
+- **SSRF 防护**：自定义渠道的上传地址推荐 HTTPS，HTTP 兼容模式会告警，并禁止指向或解析到内网地址
 - **路径穿越防护**：对象路径模板渲染时拒绝 `../` 等非法路径
 
 ## 使用建议

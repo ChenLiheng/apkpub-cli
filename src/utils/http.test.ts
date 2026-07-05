@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
-import { assertSafeUrl, withRetry } from './http.js';
+import { lookup } from 'node:dns/promises';
+import { assertSafeUrl, assertSafeUrlAsync, withRetry } from './http.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
+
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(),
+}));
+
+function mockLookupAll(address: string): void {
+  vi.mocked(lookup).mockResolvedValueOnce([{ address, family: 4 }] as never);
+}
 
 describe('assertSafeUrl', () => {
   it('允许公网 https 地址', () => {
@@ -45,6 +54,10 @@ describe('assertSafeUrl', () => {
     'http://172.16.0.1/x',
     'http://192.168.1.1/x',
     'http://169.254.1.1/x',
+    'http://[::1]/x',
+    'http://[fc00::1]/x',
+    'http://[fe80::1]/x',
+    'http://2130706433/x',
   ])('拒绝内网地址 %s', (url) => {
     try {
       assertSafeUrl(url);
@@ -52,6 +65,28 @@ describe('assertSafeUrl', () => {
     } catch (err) {
       expect((err as ApkpubError).code).toBe(ErrorCode.SSRF_BLOCKED);
     }
+  });
+});
+
+describe('assertSafeUrlAsync', () => {
+  it('允许 DNS 解析到公网地址', async () => {
+    mockLookupAll('93.184.216.34');
+    await expect(assertSafeUrlAsync('https://example.com/upload')).resolves.toBeUndefined();
+  });
+
+  it('拒绝 DNS 解析到内网地址', async () => {
+    mockLookupAll('10.0.0.2');
+    await expect(assertSafeUrlAsync('https://internal.example.com/upload')).rejects.toMatchObject({
+      code: ErrorCode.SSRF_BLOCKED,
+    });
+  });
+
+  it('HTTP 兼容模式会输出安全警告到 stderr', async () => {
+    mockLookupAll('93.184.216.34');
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await assertSafeUrlAsync('http://example.com/upload', '上传地址', { allowHttp: true, warnOnHttp: true });
+    expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining('HTTP 明文 URL'));
+    writeSpy.mockRestore();
   });
 });
 

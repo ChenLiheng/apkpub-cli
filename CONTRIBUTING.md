@@ -13,7 +13,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-org/apkpub-cli.git
+git clone https://github.com/ChenLiheng/apkpub-cli.git
 cd apkpub-cli
 
 # 安装依赖
@@ -85,7 +85,7 @@ src/
 
 ## 报告问题
 
-请通过 [Issues](https://github.com/your-org/apkpub-cli/issues) 提交缺陷或功能建议，并使用对应模板。涉及安全漏洞请参阅 [SECURITY.md](SECURITY.md)。
+请通过 [Issues](https://github.com/ChenLiheng/apkpub-cli/issues) 提交缺陷或功能建议，并使用对应模板。涉及安全漏洞请参阅 [SECURITY.md](SECURITY.md)。
 
 ## 许可
 

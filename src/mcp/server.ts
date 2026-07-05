@@ -11,6 +11,8 @@ import { Dispatcher } from '../core/Dispatcher.js';
 import { resolveChannels } from '../channels/registry.js';
 import { resolveConfigSecrets } from '../secrets/resolver.js';
 import { TaskLauncher } from '../core/TaskLauncher.js';
+import { buildDescriptor } from '../cli/descriptor.js';
+import { PACKAGE_VERSION } from '../version.js';
 
 const infoSchema = z.object({ apk: z.string().min(1) });
 const statusSchema = z.object({ app: z.string().min(1), channels: z.array(z.string()).optional() });
@@ -24,63 +26,87 @@ const publishSchema = z.object({
 });
 const doctorSchema = z.object({ app: z.string().min(1) });
 
+export function createMcpJsonResponse(data: unknown): {
+  content: { type: 'text'; text: string }[];
+  structuredContent: unknown;
+} {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(data) }],
+    structuredContent: data,
+  };
+}
+
+export function buildMcpTools(): {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}[] {
+  return [
+    {
+      name: 'apkpub_describe',
+      description: '输出 apkpub 命令、渠道、退出码与 Agent 推荐工作流',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'apkpub_info',
+      description: '解析 APK 文件，获取包名、版本号等信息',
+      inputSchema: {
+        type: 'object',
+        properties: { apk: { type: 'string', description: 'APK 文件路径' } },
+        required: ['apk'],
+      },
+    },
+    {
+      name: 'apkpub_status',
+      description: '查询应用在各市场的审核状态与线上版本',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          app: { type: 'string', description: '应用包名' },
+          channels: { type: 'array', items: { type: 'string' }, description: '渠道列表' },
+        },
+        required: ['app'],
+      },
+    },
+    {
+      name: 'apkpub_publish',
+      description: '发布 APK 到指定渠道',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          app: { type: 'string', description: '应用包名' },
+          apk: { type: 'string', description: 'APK 文件或目录路径' },
+          channels: { type: 'array', items: { type: 'string' }, description: '渠道列表' },
+          desc: { type: 'string', description: '更新描述' },
+          dryRun: { type: 'boolean', description: '仅预检' },
+          parallel: { type: 'number', description: '并行数' },
+        },
+        required: ['app', 'apk'],
+      },
+    },
+    {
+      name: 'apkpub_doctor',
+      description: '体检应用配置与各渠道凭证',
+      inputSchema: {
+        type: 'object',
+        properties: { app: { type: 'string', description: '应用包名' } },
+        required: ['app'],
+      },
+    },
+  ];
+}
+
 /** 启动 MCP Server */
 export async function startMcpServer(): Promise<void> {
   const server = new Server(
-    { name: 'apkpub-cli', version: '1.0.0' },
+    { name: 'apkpub-cli', version: PACKAGE_VERSION },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      {
-        name: 'apkpub_info',
-        description: '解析 APK 文件，获取包名、版本号等信息',
-        inputSchema: {
-          type: 'object',
-          properties: { apk: { type: 'string', description: 'APK 文件路径' } },
-          required: ['apk'],
-        },
-      },
-      {
-        name: 'apkpub_status',
-        description: '查询应用在各市场的审核状态与线上版本',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            app: { type: 'string', description: '应用包名' },
-            channels: { type: 'array', items: { type: 'string' }, description: '渠道列表' },
-          },
-          required: ['app'],
-        },
-      },
-      {
-        name: 'apkpub_publish',
-        description: '发布 APK 到指定渠道',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            app: { type: 'string', description: '应用包名' },
-            apk: { type: 'string', description: 'APK 文件或目录路径' },
-            channels: { type: 'array', items: { type: 'string' }, description: '渠道列表' },
-            desc: { type: 'string', description: '更新描述' },
-            dryRun: { type: 'boolean', description: '仅预检' },
-            parallel: { type: 'number', description: '并行数' },
-          },
-          required: ['app', 'apk'],
-        },
-      },
-      {
-        name: 'apkpub_doctor',
-        description: '体检应用配置与各渠道凭证',
-        inputSchema: {
-          type: 'object',
-          properties: { app: { type: 'string', description: '应用包名' } },
-          required: ['app'],
-        },
-      },
-    ],
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: buildMcpTools() }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
@@ -88,10 +114,14 @@ export async function startMcpServer(): Promise<void> {
 
     try {
       switch (name) {
+        case 'apkpub_describe': {
+          const descriptor = buildDescriptor();
+          return createMcpJsonResponse(descriptor);
+        }
         case 'apkpub_info': {
           const { apk } = infoSchema.parse(params);
           const info = await parseApk(apk);
-          return { content: [{ type: 'text', text: JSON.stringify(info) }] };
+          return createMcpJsonResponse(info);
         }
         case 'apkpub_status': {
           const { app, channels: channelNames } = statusSchema.parse(params);
@@ -113,7 +143,8 @@ export async function startMcpServer(): Promise<void> {
             const state = await channel.getMarketState(appConfig.applicationId, resolved);
             results.push({ channel: channel.name, ...state });
           }
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, results }) }] };
+          const output = { ok: true, results };
+          return createMcpJsonResponse(output);
         }
         case 'apkpub_publish': {
           const { app, apk, channels: channelNames, desc, dryRun, parallel } = publishSchema.parse(params);
@@ -128,7 +159,7 @@ export async function startMcpServer(): Promise<void> {
             dryRun,
             parallel: parallel ?? 1,
           });
-          return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+          return createMcpJsonResponse(result);
         }
         case 'apkpub_doctor': {
           const { app } = doctorSchema.parse(params);
@@ -150,7 +181,8 @@ export async function startMcpServer(): Promise<void> {
               checks.push({ channel: channel.name, ok: false, error: String(err) });
             }
           }
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: checks.every((c) => c.ok), checks }) }] };
+          const output = { ok: checks.every((c) => c.ok), checks };
+          return createMcpJsonResponse(output);
         }
         default:
           return { content: [{ type: 'text', text: JSON.stringify({ error: `未知工具: ${name}` }) }], isError: true };

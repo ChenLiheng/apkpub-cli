@@ -39,7 +39,7 @@ APK 多市场分发 CLI 工具。支持将已签名的 APK 一键发布到华为
 ```bash
 npm i apkpub-cli
 # 或
-pnpm i apkpub-cli
+pnpm add -g apkpub-cli
 ```
 
 ## 快速开始
@@ -250,7 +250,8 @@ pnpm typecheck
 - 配置目录权限：`~/.apkpub/` 0700，配置文件 0600
 - `config export` 默认剥离密钥
 - 日志与 JSON 输出自动脱敏
-- 自定义渠道 URL 强制 HTTPS 并禁止内网地址（SSRF 防护）
+- 自定义渠道 URL 默认推荐 HTTPS；HTTP 仅作为显式兼容路径保留，并会输出安全警告
+- 自定义渠道 URL 会阻止 localhost、私网地址与解析到内网的域名（SSRF 防护）
 
 完整安全策略与漏洞上报方式见 [SECURITY.md](SECURITY.md)。
 

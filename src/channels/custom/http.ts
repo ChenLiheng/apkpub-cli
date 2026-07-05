@@ -4,7 +4,7 @@ import path from 'node:path';
 import FormData from 'form-data';
 import type { CustomChannelConfig } from '../../config/schema.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
-import { assertSafeUrl, createHttpClient } from '../../utils/http.js';
+import { assertSafeUrlAsync, createHttpClient } from '../../utils/http.js';
 import { renderTemplate } from '../../utils/template.js';
 import type { UploadContext, UploadResult } from '../Channel.js';
 
@@ -34,7 +34,7 @@ export async function uploadToHttp(ctx: UploadContext, config: CustomChannelConf
     objectKey,
   });
 
-  assertSafeUrl(uploadUrl, '上传地址', { allowHttp: true });
+  await assertSafeUrlAsync(uploadUrl, '上传地址', { allowHttp: true, warnOnHttp: true });
   const client = createHttpClient({ timeout: 300_000 });
   const method = config.method ?? 'PUT';
 
