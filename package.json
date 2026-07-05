@@ -1,6 +1,6 @@
 {
   "name": "apkpub-cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "APK 多市场分发 CLI 工具 - 一键发布到华为/小米/OPPO/VIVO/荣耀及自定义渠道",
   "type": "module",
   "main": "dist/apkpub.js",
