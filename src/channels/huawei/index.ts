@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createReadStream } from 'node:fs';
+import fs from 'node:fs';
 import path from 'node:path';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
 import { createHttpClient, withRetry } from '../../utils/http.js';
@@ -72,8 +72,12 @@ async function getUploadUrl(
   }
   const headers: Record<string, string> = {};
   if (urlInfo.headers) {
-    for (const h of urlInfo.headers) {
-      headers[h.key ?? h.name] = h.value;
+    if (Array.isArray(urlInfo.headers)) {
+      for (const h of urlInfo.headers) {
+        headers[h.key ?? h.name] = h.value;
+      }
+    } else {
+      Object.assign(headers, urlInfo.headers);
     }
   }
   return { url: urlInfo.url, objectId: urlInfo.objectId, headers };
@@ -86,12 +90,16 @@ async function uploadFile(
   onProgress: (p: number) => void,
 ): Promise<void> {
   const client = createHttpClient({ timeout: 600_000 });
-  const stream = createReadStream(filePath);
+  // 以流方式上传避免大 APK 整包读入内存；显式带 Content-Length 满足 OBS 预签名 PUT 的长度校验
+  const contentLength = fs.statSync(filePath).size;
+  const stream = fs.createReadStream(filePath);
   const resp = await client.put(uploadUrl, stream, {
-    headers: { ...headers, 'Content-Type': 'application/octet-stream' },
+    headers: { ...headers, 'Content-Type': 'application/octet-stream', 'Content-Length': String(contentLength) },
     maxBodyLength: Infinity,
+    maxContentLength: Infinity,
     onUploadProgress: (e) => {
-      if (e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+      const total = e.total ?? contentLength;
+      if (total) onProgress(Math.round((e.loaded / total) * 100));
     },
   });
   if (resp.status < 200 || resp.status >= 300) {
@@ -118,7 +126,7 @@ async function bindApk(
     { fileType: 5, files: [{ fileName, fileDestUrl: objectId }] },
     { headers: { client_id: clientId, Authorization: `Bearer ${token}` }, params: { appId } },
   );
-  const pkgId = resp.data?.pkgVersion?.[0]?.pkgId ?? resp.data?.pkgId;
+  const pkgId = resp.data?.pkgVersion?.[0] ?? resp.data?.pkgId;
   if (!pkgId) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
