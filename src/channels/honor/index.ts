@@ -15,6 +15,15 @@ const credSchema = z.object({
   client_secret: z.string().min(1),
 });
 
+// 荣耀当前版本信息响应（宽松解析：仅约束依赖字段，其余透传）
+const releaseInfoSchema = z
+  .object({
+    auditStatus: z.coerce.number().optional(),
+    versionCode: z.coerce.number().optional(),
+    versionName: z.coerce.string().optional(),
+  })
+  .passthrough();
+
 async function getToken(clientId: string, clientSecret: string): Promise<string> {
   const client = createHttpClient();
   const resp = await client.post(
@@ -83,12 +92,12 @@ export const honorChannel: Channel = {
       params: { appId: honorAppId },
     });
     checkHonorResult(resp.data, 'getReviewState');
-    const data = resp.data.data;
+    const data = releaseInfoSchema.parse(resp.data?.data ?? {});
     return {
-      reviewState: data?.auditStatus === 1 ? 'online' : data?.auditStatus === 2 ? 'reviewing' : 'unknown',
+      reviewState: data.auditStatus === 1 ? 'online' : data.auditStatus === 2 ? 'reviewing' : 'unknown',
       enableSubmit: true,
-      lastVersionCode: Number(data?.versionCode ?? 0),
-      lastVersionName: String(data?.versionName ?? '0'),
+      lastVersionCode: data.versionCode ?? 0,
+      lastVersionName: data.versionName ?? '0',
     };
   },
   async validateCredentials(config) {
@@ -130,23 +139,24 @@ export const honorChannel: Channel = {
         if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
       },
     });
-    if (uploadResp.data?.code !== 0 && uploadResp.status >= 400) {
+    if (uploadResp.data?.code !== 0) {
       throw new ApkpubError({
         code: ErrorCode.CHANNEL_UPLOAD_FAILED,
         channel: 'honor',
         step: 'uploadFile',
-        message: '上传文件失败',
+        message: `上传文件失败: ${JSON.stringify(uploadResp.data)}`,
         retryable: true,
       });
     }
     ctx.onProgress({ step: 'bindApk' });
-    await client.post(
+    const bindResp = await client.post(
       `${BASE_URL}/openapi/v1/publish/update-file-info`,
       { fileInfoList: [{ objectId: uploadInfo.objectId }] },
       { headers: { Authorization: auth }, params: { appId } },
     );
+    checkHonorResult(bindResp.data, 'bindApk');
     ctx.onProgress({ step: 'updateDesc' });
-    await client.post(
+    const descResp = await client.post(
       `${BASE_URL}/openapi/v1/publish/update-language-info`,
       {
         languageInfoList: [{
@@ -158,11 +168,13 @@ export const honorChannel: Channel = {
       },
       { headers: { Authorization: auth }, params: { appId } },
     );
+    checkHonorResult(descResp.data, 'updateDesc');
     ctx.onProgress({ step: 'submit' });
-    await client.post(`${BASE_URL}/openapi/v1/publish/submit-audit`, { releaseType: 1 }, {
+    const submitResp = await client.post(`${BASE_URL}/openapi/v1/publish/submit-audit`, { releaseType: 1 }, {
       headers: { Authorization: auth },
       params: { appId },
     });
+    checkHonorResult(submitResp.data, 'submit');
     ctx.onProgress({ step: 'done', percent: 100 });
     return { message: '提交审核成功' };
   },

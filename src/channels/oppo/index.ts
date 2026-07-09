@@ -13,6 +13,15 @@ const credSchema = z.object({
   client_secret: z.string().min(1),
 });
 
+// OPPO 应用信息响应（宽松解析：仅约束依赖字段，其余透传）
+const appInfoSchema = z
+  .object({
+    version_code: z.coerce.number().optional(),
+    version_name: z.coerce.string().optional(),
+    audit_status: z.coerce.number().optional(),
+  })
+  .passthrough();
+
 function buildSignedUrl(
   originUrl: string,
   params: Record<string, string>,
@@ -47,12 +56,13 @@ export const oppoChannel: Channel = {
     const url = buildSignedUrl(`${DOMAIN}/resource/v1/app/info`, { pkg_name: appId }, token, creds.client_secret, true);
     const resp = await client.get(url);
     checkOppoResult(resp.data, '获取App信息');
-    const data = resp.data.data;
+    const data = appInfoSchema.parse(resp.data?.data ?? {});
     return {
-      reviewState: 'online',
+      // OPPO audit_status 为 111 表示已上架，其余视为审核中
+      reviewState: data.audit_status === 111 ? 'online' : 'reviewing',
       enableSubmit: true,
-      lastVersionCode: Number(data?.version_code ?? 0),
-      lastVersionName: String(data?.version_name ?? '0'),
+      lastVersionCode: data.version_code ?? 0,
+      lastVersionName: data.version_name ?? '0',
     };
   },
   async validateCredentials(config) {
@@ -110,8 +120,8 @@ export const oppoChannel: Channel = {
       apk_url: apkUrl,
       update_desc: ctx.desc,
       online_type: '1',
-      second_category_id: String(appInfo.second_category_id ?? appInfo.secondCategory ?? ''),
-      third_category_id: String(appInfo.third_category_id ?? appInfo.thirdCategory ?? ''),
+      second_category_id: String(appInfo.ver_second_category_id ?? appInfo.second_category_id ?? appInfo.secondCategory ?? ''),
+      third_category_id: String(appInfo.ver_third_category_id ?? appInfo.third_category_id ?? appInfo.thirdCategory ?? ''),
       summary: appInfo.summary ?? '',
       detail_desc: appInfo.detail_desc ?? appInfo.detailDesc ?? '',
       privacy_source_url: appInfo.privacy_source_url ?? appInfo.privacyUrl ?? '',

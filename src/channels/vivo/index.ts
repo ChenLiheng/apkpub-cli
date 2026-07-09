@@ -2,25 +2,14 @@ import { z } from 'zod';
 import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
+import { MarketStateCache } from '../marketCache.js';
 import { createHttpClient } from '../../utils/http.js';
 import { fileMd5 } from '../../utils/files.js';
 import { vivoSignParams } from '../../signers/hmac.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 
-// VIVO API 查询缓存，避免单次发布内重复调用触发频率限制
-// 带 TTL 失效，防止 MCP 长驻进程读取到陈旧的线上版本信息
-const CACHE_TTL_MS = 60_000;
-const queryCache = new Map<string, { state: MarketInfo; onlineType: number; expireAt: number }>();
-
-function readCache(appId: string): { state: MarketInfo; onlineType: number } | undefined {
-  const cached = queryCache.get(appId);
-  if (!cached) return undefined;
-  if (Date.now() > cached.expireAt) {
-    queryCache.delete(appId);
-    return undefined;
-  }
-  return cached;
-}
+// VIVO API 查询缓存（带 TTL），避免单次发布内重复查询触发频率限制
+const queryCache = new MarketStateCache<{ state: MarketInfo; onlineType: number }>();
 
 const DOMAIN = 'https://developer-api.vivo.com.cn/router/rest';
 
@@ -28,6 +17,15 @@ const credSchema = z.object({
   access_key: z.string().min(1),
   access_secret: z.string().min(1),
 });
+
+// VIVO 应用详情响应（宽松解析：仅约束依赖字段，其余透传）
+const appDetailSchema = z
+  .object({
+    versionCode: z.coerce.number().optional(),
+    versionName: z.coerce.string().optional(),
+    onlineType: z.coerce.number().optional(),
+  })
+  .passthrough();
 
 function buildUrl(method: string, params: Record<string, string>, accessKey: string, accessSecret: string): string {
   const signed = vivoSignParams(accessKey, accessSecret, method, params);
@@ -45,25 +43,21 @@ export const vivoChannel: Channel = {
   fileNameIdentify: 'VIVO',
   credentialSchema: credSchema,
   async getMarketState(appId, config) {
-    const cached = readCache(appId);
+    const cached = queryCache.get(appId);
     if (cached) return cached.state;
     const creds = credSchema.parse(config);
     const client = createHttpClient();
     const url = buildUrl('app.query.details', { packageName: appId }, creds.access_key, creds.access_secret);
     const resp = await client.get(url);
     checkVivoResult(resp.data, '查询应用详情');
-    const data = resp.data.data;
+    const data = appDetailSchema.parse(resp.data?.data ?? {});
     const marketState = {
       reviewState: 'online' as const,
       enableSubmit: true,
-      lastVersionCode: Number(data?.versionCode ?? 0),
-      lastVersionName: String(data?.versionName ?? '0'),
+      lastVersionCode: data.versionCode ?? 0,
+      lastVersionName: data.versionName ?? '0',
     };
-    queryCache.set(appId, {
-      state: marketState,
-      onlineType: Number(data?.onlineType ?? 1),
-      expireAt: Date.now() + CACHE_TTL_MS,
-    });
+    queryCache.set(appId, { state: marketState, onlineType: data.onlineType ?? 1 });
     return marketState;
   },
   async validateCredentials(config) {
@@ -74,7 +68,7 @@ export const vivoChannel: Channel = {
     const client = createHttpClient({ timeout: 600_000 });
     ctx.onProgress({ step: 'getAppInfo' });
     await vivoChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
-    const cached = readCache(ctx.apkInfo.applicationId);
+    const cached = queryCache.get(ctx.apkInfo.applicationId);
     const appInfo = cached ?? { onlineType: 1 };
     ctx.onProgress({ step: 'uploading', percent: 0 });
     const fileMd5Hash = await fileMd5(ctx.filePath);
@@ -103,6 +97,7 @@ export const vivoChannel: Channel = {
         versionCode: String(apkResult.versionCode),
         apk: apkResult.serialnumber,
         fileMd5: apkResult.fileMd5,
+        // onlineType：1=审核通过后立即发布，2=定时发布（需配合 onlineTime）；此处沿用线上应用当前的发布类型，默认立即发布
         onlineType: String(appInfo.onlineType ?? 1),
         updateDesc: ctx.desc,
       },

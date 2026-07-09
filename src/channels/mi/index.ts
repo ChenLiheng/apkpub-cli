@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
+import { MarketStateCache } from '../marketCache.js';
 import { createHttpClient } from '../../utils/http.js';
 import { fileMd5 } from '../../utils/files.js';
 import { rsaEncrypt } from '../../signers/rsa.js';
@@ -18,6 +19,15 @@ const credSchema = z.object({
   privateKey: z.string().min(1),
 });
 
+// 小米应用信息响应（宽松解析：仅约束依赖字段，其余透传）
+const packageInfoSchema = z
+  .object({
+    versionCode: z.coerce.number().optional(),
+    versionName: z.coerce.string().optional(),
+    appName: z.coerce.string().optional(),
+  })
+  .passthrough();
+
 function buildSig(privateKey: string, hashes: { name: string; hash: string }[]): string {
   const sig = JSON.stringify({
     password: privateKey,
@@ -26,20 +36,8 @@ function buildSig(privateKey: string, hashes: { name: string; hash: string }[]):
   return sig;
 }
 
-// 小米 API 响应缓存，避免单次发布内重复调用触发频率限制
-// 带 TTL 失效，防止 MCP 长驻进程读取到陈旧的线上版本信息
-const CACHE_TTL_MS = 60_000;
-const queryCache = new Map<string, { state: MarketInfo; appName: string; expireAt: number }>();
-
-function readCache(appId: string): { state: MarketInfo; appName: string } | undefined {
-  const cached = queryCache.get(appId);
-  if (!cached) return undefined;
-  if (Date.now() > cached.expireAt) {
-    queryCache.delete(appId);
-    return undefined;
-  }
-  return cached;
-}
+// 小米 API 响应缓存（带 TTL），避免单次发布内重复查询触发频率限制
+const queryCache = new MarketStateCache<{ state: MarketInfo; appName: string }>();
 
 export const miChannel: Channel = {
   name: 'mi',
@@ -48,7 +46,7 @@ export const miChannel: Channel = {
   fileNameIdentify: 'MI',
   credentialSchema: credSchema,
   async getMarketState(appId, config) {
-    const cached = readCache(appId);
+    const cached = queryCache.get(appId);
     if (cached) return cached.state;
     const creds = credSchema.parse(config);
     const requestData = JSON.stringify({ userName: creds.account, packageName: appId });
@@ -61,15 +59,15 @@ export const miChannel: Channel = {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
     });
     checkMiResult(resp.data, '获取App信息');
-    const info = resp.data.packageInfo ?? resp.data;
+    const info = packageInfoSchema.parse((resp.data?.packageInfo ?? resp.data) ?? {});
     const marketState = {
       reviewState: 'online' as const,
       enableSubmit: true,
-      lastVersionCode: Number(info?.versionCode ?? 0),
-      lastVersionName: String(info?.versionName ?? '0'),
+      lastVersionCode: info.versionCode ?? 0,
+      lastVersionName: info.versionName ?? '0',
     };
-    const appName = String(info?.appName ?? '');
-    queryCache.set(appId, { state: marketState, appName, expireAt: Date.now() + CACHE_TTL_MS });
+    const appName = info.appName ?? '';
+    queryCache.set(appId, { state: marketState, appName });
     return marketState;
   },
   async validateCredentials(config) {
@@ -79,7 +77,7 @@ export const miChannel: Channel = {
     const creds = credSchema.parse(ctx.config);
     ctx.onProgress({ step: 'getAppInfo' });
     const marketState = await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
-    const cachedAppName = (readCache(ctx.apkInfo.applicationId)?.appName || marketState?.lastVersionName) ?? ctx.apkInfo.versionName;
+    const cachedAppName = (queryCache.get(ctx.apkInfo.applicationId)?.appName || marketState?.lastVersionName) ?? ctx.apkInfo.versionName;
     const requestData = JSON.stringify({
       userName: creds.account,
       synchroType: 1,

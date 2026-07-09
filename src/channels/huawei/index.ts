@@ -12,6 +12,40 @@ const credSchema = z.object({
   client_secret: z.string().min(1),
 });
 
+// 华为应用信息响应（宽松解析：仅约束我们依赖的字段，其余透传）
+const appInfoSchema = z
+  .object({
+    releaseState: z.union([z.number(), z.string()]).optional(),
+    status: z.union([z.number(), z.string()]).optional(),
+    versionCode: z.coerce.number().optional(),
+    versionNumber: z.coerce.string().optional(),
+    onShelfVersionNumber: z.coerce.string().optional(),
+    versionName: z.coerce.string().optional(),
+  })
+  .passthrough();
+
+// 华为上传地址响应中 headers 可能是数组或对象两种形态
+const uploadHeadersSchema = z
+  .union([
+    z.array(z.object({ key: z.string().optional(), name: z.string().optional(), value: z.string() }).passthrough()),
+    z.record(z.string()),
+  ])
+  .optional();
+
+/** 检查华为 API 业务返回码，ret.code !== 0 抛异常 */
+function checkHwRet(respData: unknown, step: string, label: string): void {
+  const ret = (respData as any)?.ret;
+  if (ret && ret.code !== 0) {
+    throw new ApkpubError({
+      code: ErrorCode.CHANNEL_UPLOAD_FAILED,
+      channel: 'huawei',
+      step,
+      message: `${label}失败: ret.code=${ret.code}, ret.msg=${ret.msg ?? ''}`,
+      retryable: true,
+    });
+  }
+}
+
 async function getToken(clientId: string, clientSecret: string): Promise<string> {
   const client = createHttpClient();
   const resp = await client.post(`${BASE_URL}/api/oauth2/v1/token`, {
@@ -19,6 +53,7 @@ async function getToken(clientId: string, clientSecret: string): Promise<string>
     client_secret: clientSecret,
     grant_type: 'client_credentials',
   });
+  checkHwRet(resp.data, 'getToken', '获取 token');
   if (resp.data?.access_token) return resp.data.access_token as string;
   throw new ApkpubError({
     code: ErrorCode.CHANNEL_AUTH_FAILED,
@@ -36,6 +71,7 @@ async function getAppId(clientId: string, token: string, packageName: string): P
     params: { packageName },
   });
   const list = resp.data?.appids ?? resp.data?.list ?? [];
+  checkHwRet(resp.data, 'getAppId', '获取AppId');
   if (!list.length) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_STATE_FAILED,
@@ -61,6 +97,7 @@ async function getUploadUrl(
     params: { appId, fileName, contentLength },
   });
   const urlInfo = resp.data?.urlInfo ?? resp.data?.url;
+  checkHwRet(resp.data, 'getUploadUrl', '获取上传地址');
   if (!urlInfo?.url) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
@@ -71,13 +108,16 @@ async function getUploadUrl(
     });
   }
   const headers: Record<string, string> = {};
-  if (urlInfo.headers) {
-    if (Array.isArray(urlInfo.headers)) {
-      for (const h of urlInfo.headers) {
-        headers[h.key ?? h.name] = h.value;
+  const parsedHeaders = uploadHeadersSchema.safeParse(urlInfo.headers);
+  if (parsedHeaders.success && parsedHeaders.data) {
+    const h = parsedHeaders.data;
+    if (Array.isArray(h)) {
+      for (const item of h) {
+        const key = item.key ?? item.name;
+        if (key) headers[key] = item.value;
       }
     } else {
-      Object.assign(headers, urlInfo.headers);
+      Object.assign(headers, h);
     }
   }
   return { url: urlInfo.url, objectId: urlInfo.objectId, headers };
@@ -127,6 +167,7 @@ async function bindApk(
     { headers: { client_id: clientId, Authorization: `Bearer ${token}` }, params: { appId } },
   );
   const pkgId = resp.data?.pkgVersion?.[0] ?? resp.data?.pkgId;
+  checkHwRet(resp.data, 'bindApk', '绑定APK');
   if (!pkgId) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
@@ -156,7 +197,9 @@ async function waitApkReady(
       headers: { client_id: clientId, Authorization: `Bearer ${token}` },
       params: { appId, pkgIds: pkgId },
     });
-    const state = resp.data?.pkgStateList?.[0]?.pkgState ?? resp.data?.compileStatus;
+    checkHwRet(resp.data, 'waitCompile', '查询编译状态');
+    const pkgState = resp.data?.pkgStateList?.[0];
+    const state = pkgState?.successStatus ?? pkgState?.pkgState ?? resp.data?.compileStatus;
     if (state === 0 || state === 'COMPILE_SUCCESS') return;
   }
   throw new ApkpubError({
@@ -183,13 +226,13 @@ export const huaweiChannel: Channel = {
       headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` },
       params: { appId: hwAppId },
     });
-    const info = resp.data?.appInfo ?? resp.data;
-    const reviewState = mapReviewState(info?.releaseState ?? info?.status);
+    const info = appInfoSchema.parse((resp.data?.appInfo ?? resp.data) ?? {});
+    const reviewState = mapReviewState(info.releaseState ?? info.status);
     return {
       reviewState,
       enableSubmit: reviewState === 'online' || reviewState === 'rejected',
-      lastVersionCode: Number(info?.versionCode ?? 0),
-      lastVersionName: String(info?.versionNumber ?? info?.onShelfVersionNumber ?? info?.versionName ?? '0'),
+      lastVersionCode: info.versionCode ?? 0,
+      lastVersionName: info.versionNumber ?? info.onShelfVersionNumber ?? info.versionName ?? '0',
     };
   },
   async validateCredentials(config) {
@@ -215,16 +258,18 @@ export const huaweiChannel: Channel = {
     await waitApkReady(creds.client_id, token, appId, bind.pkgId, ctx.signal);
     ctx.onProgress({ step: 'updateDesc' });
     const client = createHttpClient();
-    await client.put(
+    const descResp = await client.put(
       `${BASE_URL}/api/publish/v2/app-language-info`,
       { lang: 'zh-CN', appDesc: ctx.desc },
       { headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` }, params: { appId } },
     );
+    checkHwRet(descResp.data, 'updateDesc', '更新版本描述');
     ctx.onProgress({ step: 'submit' });
-    await client.post(`${BASE_URL}/api/publish/v2/app-submit`, null, {
+    const submitResp = await client.post(`${BASE_URL}/api/publish/v2/app-submit`, null, {
       headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` },
       params: { appId },
     });
+    checkHwRet(submitResp.data, 'submit', '提交审核');
     ctx.onProgress({ step: 'done', percent: 100 });
     return { message: '提交审核成功' };
   },
@@ -233,7 +278,8 @@ export const huaweiChannel: Channel = {
 function mapReviewState(state: unknown): MarketInfo['reviewState'] {
   const s = Number(state);
   if (s === 0 || s === 7) return 'online';        // 已上架 / 草稿
-  if (s === 4 || s === 5) return 'reviewing';      // 审核中 / 升级中
-  if (s === 1 || s === 8 || s === 9) return 'rejected'; // 审核不通过
-  return 'unknown';                                 // 已下架(2) / 开发者下架(10) 等
+  if (s === 4 || s === 5) return 'reviewing';     // 审核中 / 升级中
+  if (s === 1 || s === 8) return 'rejected';      // 上架审核不通过 / 升级审核不通过
+  // 已下架(2) / 待上架(3) / 申请下架(6) / 下架审核不通过(9) / 开发者下架(10) / 撤销上架(11) 等
+  return 'unknown';
 }
