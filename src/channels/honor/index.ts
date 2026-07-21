@@ -18,7 +18,7 @@ const credSchema = z.object({
 // 荣耀当前版本信息响应（宽松解析：仅约束依赖字段，其余透传）
 const releaseInfoSchema = z
   .object({
-    auditStatus: z.coerce.number().optional(),
+    auditResult: z.coerce.number().optional(),
     versionCode: z.coerce.number().optional(),
     versionName: z.coerce.string().optional(),
   })
@@ -94,7 +94,7 @@ export const honorChannel: Channel = {
     checkHonorResult(resp.data, 'getReviewState');
     const data = releaseInfoSchema.parse(resp.data?.data ?? {});
     return {
-      reviewState: data.auditStatus === 1 ? 'online' : data.auditStatus === 2 ? 'reviewing' : 'unknown',
+      reviewState: data.auditResult === 0 ? 'reviewing' : data.auditResult === 1 ? 'online' : data.auditResult === 2 ? 'rejected' : 'unknown',
       enableSubmit: true,
       lastVersionCode: data.versionCode ?? 0,
       lastVersionName: data.versionName ?? '0',

@@ -57,7 +57,7 @@ describe('honorChannel.getMarketState', () => {
     nock(API)
       .get('/openapi/v1/publish/get-app-current-release')
       .query(true)
-      .reply(200, { code: 0, data: { auditStatus: 1, versionCode: 77, versionName: '5.0.0' } });
+      .reply(200, { code: 0, data: { auditResult: 1, versionCode: 77, versionName: '5.0.0' } });
 
     const state = await honorChannel.getMarketState!(pkg, config);
     expect(state?.lastVersionCode).toBe(77);
