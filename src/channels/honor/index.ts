@@ -95,9 +95,11 @@ export const honorChannel: Channel = {
     });
     checkHonorResult(resp.data, 'getReviewState');
     const data = releaseInfoSchema.parse(resp.data?.data ?? {});
+    const reviewState =
+      data.auditResult === 0 ? 'reviewing' : data.auditResult === 1 ? 'online' : data.auditResult === 2 ? 'rejected' : 'unknown';
     return {
-      reviewState: data.auditResult === 0 ? 'reviewing' : data.auditResult === 1 ? 'online' : data.auditResult === 2 ? 'rejected' : 'unknown',
-      enableSubmit: true,
+      reviewState,
+      enableSubmit: reviewState !== 'reviewing',
       lastVersionCode: data.versionCode ?? 0,
       lastVersionName: data.versionName ?? '0',
     };

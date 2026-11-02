@@ -2,7 +2,7 @@ import pLimit from 'p-limit';
 import type { AppConfig } from '../config/schema.js';
 import type { Channel } from '../channels/Channel.js';
 import { resolveConfigSecrets, resolveCustomChannelSecrets } from '../secrets/resolver.js';
-import { checkPackageMatch, checkVersion } from './versionCheck.js';
+import { checkPackageMatch, checkSubmittable, checkVersion } from './versionCheck.js';
 import { TaskLauncher } from './TaskLauncher.js';
 import {
   aggregateResults,
@@ -66,6 +66,7 @@ export class Dispatcher {
           if (channel.getMarketState) {
             const marketState = await channel.getMarketState(appConfig.applicationId, launcher.getConfig());
             checkVersion(apkInfo, marketState, channel.name);
+            checkSubmittable(marketState, channel.name);
           }
 
           if (dryRun) {

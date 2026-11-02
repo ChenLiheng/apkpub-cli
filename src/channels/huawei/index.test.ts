@@ -69,6 +69,7 @@ describe('huaweiChannel.getMarketState', () => {
 
     const state = await huaweiChannel.getMarketState!(pkg, config);
     expect(state?.reviewState).toBe(expected);
+    expect(state?.enableSubmit).toBe(expected !== 'reviewing');
     expect(state?.lastVersionCode).toBe(99);
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkVersion, checkPackageMatch } from './versionCheck.js';
+import { checkVersion, checkPackageMatch, checkSubmittable } from './versionCheck.js';
 import type { ApkInfo } from '../apk/ApkParser.js';
 import type { MarketInfo } from '../channels/Channel.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
@@ -64,6 +64,25 @@ describe('checkPackageMatch', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApkpubError);
       expect((err as ApkpubError).code).toBe(ErrorCode.INVALID_ARGUMENT);
+    }
+  });
+});
+
+describe('checkSubmittable', () => {
+  it('线上信息缺失或允许提交时通过', () => {
+    expect(() => checkSubmittable(undefined, 'huawei')).not.toThrow();
+    expect(() => checkSubmittable(makeMarket(), 'huawei')).not.toThrow();
+  });
+
+  it('市场处于审核中时抛 CHANNEL_NOT_SUBMITTABLE 且不可重试', () => {
+    try {
+      checkSubmittable(makeMarket({ reviewState: 'reviewing', enableSubmit: false }), 'huawei');
+      expect.unreachable('应当抛出异常');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApkpubError);
+      expect((err as ApkpubError).code).toBe(ErrorCode.CHANNEL_NOT_SUBMITTABLE);
+      expect((err as ApkpubError).retryable).toBe(false);
+      expect((err as ApkpubError).channel).toBe('huawei');
     }
   });
 });

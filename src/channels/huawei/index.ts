@@ -230,7 +230,8 @@ export const huaweiChannel: Channel = {
     const reviewState = mapReviewState(info.releaseState ?? info.status);
     return {
       reviewState,
-      enableSubmit: reviewState === 'online' || reviewState === 'rejected',
+      // 审核中不可重复提交；其余状态（含下架、待上架等）交由华为接口自行校验
+      enableSubmit: reviewState !== 'reviewing',
       lastVersionCode: info.versionCode ?? 0,
       lastVersionName: info.versionNumber ?? info.onShelfVersionNumber ?? info.versionName ?? '0',
     };
