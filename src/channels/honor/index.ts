@@ -9,6 +9,8 @@ import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 
 const BASE_URL = 'https://appmarket-openapi-drcn.cloud.honor.com';
 const TOKEN_URL = 'https://iam.developer.honor.com/auth/token';
+/** APK 文件上传超时（大包上传耗时较长） */
+const UPLOAD_TIMEOUT_MS = 600_000;
 
 const credSchema = z.object({
   client_id: z.string().min(1),
@@ -132,7 +134,8 @@ export const honorChannel: Channel = {
     ctx.onProgress({ step: 'uploading', percent: 0 });
     const form = new FormData();
     form.append('file', createReadStream(ctx.filePath), { filename: fileName });
-    const uploadResp = await client.post(uploadInfo.url, form, {
+    const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS });
+    const uploadResp = await uploadClient.post(uploadInfo.url, form, {
       headers: { Authorization: auth, ...form.getHeaders() },
       maxBodyLength: Infinity,
       onUploadProgress: (e) => {

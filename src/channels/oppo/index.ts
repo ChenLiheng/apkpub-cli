@@ -7,6 +7,8 @@ import { signSortedParams } from '../../signers/hmac.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 
 const DOMAIN = 'https://oop-openapi-cn.heytapmobi.com';
+/** APK 文件上传超时（大包上传耗时较长） */
+const UPLOAD_TIMEOUT_MS = 600_000;
 
 const credSchema = z.object({
   client_id: z.string().min(1),
@@ -103,7 +105,8 @@ export const oppoChannel: Channel = {
     form.append('file', createReadStream(ctx.filePath), { filename: 'app.apk' });
     form.append('type', 'apk');
     form.append('sign', sign);
-    const uploadResp = await client.post(signedUploadUrl, form, {
+    const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS });
+    const uploadResp = await uploadClient.post(signedUploadUrl, form, {
       headers: form.getHeaders(),
       maxBodyLength: Infinity,
       onUploadProgress: (e) => {
