@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { CustomChannelConfig } from '../../config/schema.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 import { md5Sign } from '../../signers/md5.js';
+import { resolveSecret } from '../../secrets/resolver.js';
 import { assertSafeUrl, assertSafeUrlAsync, createHttpClient } from '../../utils/http.js';
 import { renderTemplate } from '../../utils/template.js';
 import type { UploadContext, UploadResult } from '../Channel.js';
@@ -21,7 +22,8 @@ async function fetchStsToken(
   contextB: string,
 ): Promise<StsToken> {
   await assertSafeUrlAsync(stsTokenUrl, 'STS Token URL', { allowHttp: true, warnOnHttp: true });
-  const sign = md5Sign(contextB, signKey);
+  const { value: resolvedSignKey } = await resolveSecret(signKey, { account: 'signKey' });
+  const sign = md5Sign(contextB, resolvedSignKey);
   const client = createHttpClient();
   const response = await client.post(
     stsTokenUrl,
