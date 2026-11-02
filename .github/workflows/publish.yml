@@ -1,6 +1,6 @@
 name: Publish to npm
 
-# 推送形如 v1.2.3 / v1.2.3-beta.1 的 tag 时触发发布；也支持手动触发（仅用于 dry-run 验证）
+# 推送形如 v1.2.3 / v1.2.3-beta.1 的 tag 时触发发布；也支持手动触发（dry_run 取消勾选即按 package.json 当前版本真正发布）
 on:
   push:
     tags:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: '仅演练（不真正发布）'
+        description: '仅演练（不真正发布）；取消勾选则真正发布'
         type: boolean
         default: true
 
@@ -31,6 +31,10 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing（OIDC）要求 npm CLI >= 11.5.1
+      - name: Upgrade npm
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -71,14 +75,10 @@ jobs:
       - name: Publish (dry-run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: pnpm publish --dry-run --no-git-checks --tag ${{ steps.dist.outputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: pnpm publish --no-git-checks --provenance --access public --tag ${{ steps.dist.outputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
