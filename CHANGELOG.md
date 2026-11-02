@@ -9,6 +9,7 @@
 
 ### 新增
 
+- `apkpub update` 命令：升级 CLI 自身（自动识别 npm/pnpm/yarn/bun），并同步内置 Agent skill；支持 `--check` / `--skill-only` / `--force` / `--tag`
 - 错误码 `CHANNEL_NOT_SUBMITTABLE`：市场处于审核中时在预检阶段直接拒绝发布
 - `publish` 支持 Ctrl+C / SIGTERM 取消（再次触发强制退出），取消信号贯通到各渠道请求与 OSS 分片上传
 
