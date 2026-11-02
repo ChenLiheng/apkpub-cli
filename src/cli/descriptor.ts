@@ -57,6 +57,17 @@ const COMMANDS = [
     ],
   },
   {
+    name: 'update',
+    description: '升级 apkpub 自身并同步内置 Agent skill',
+    options: [
+      { name: '--check', required: false, description: '仅检查新版本' },
+      { name: '--skill-only', required: false, description: '仅同步 skill' },
+      { name: '--force', required: false, description: '强制重新安装' },
+      { name: '--tag', required: false, description: 'npm dist-tag，默认 latest' },
+      { name: '--json', required: false, description: 'JSON 输出' },
+    ],
+  },
+  {
     name: 'mcp',
     description: '启动 MCP server 模式',
     options: [],

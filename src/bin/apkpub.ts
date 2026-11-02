@@ -8,6 +8,7 @@ import { registerChannelsCommand } from '../cli/channels.js';
 import { registerDoctorCommand } from '../cli/doctor.js';
 import { registerDescribeCommand } from '../cli/describe.js';
 import { registerMcpCommand } from '../cli/mcp.js';
+import { registerUpdateCommand } from '../cli/update.js';
 import { PACKAGE_VERSION } from '../version.js';
 
 const program = new Command();
@@ -26,6 +27,7 @@ registerChannelsCommand(program);
 registerDoctorCommand(program);
 registerDescribeCommand(program);
 registerMcpCommand(program);
+registerUpdateCommand(program);
 
 const argv = process.argv[2] === '--'
   ? [process.argv[0] ?? 'node', process.argv[1] ?? 'apkpub', ...process.argv.slice(3)]

@@ -180,6 +180,14 @@ apkpub mcp
 
 MCP 暴露工具：`apkpub_info`、`apkpub_status`、`apkpub_publish`、`apkpub_doctor`
 
+#### 升级与 skill 更新
+
+```bash
+apkpub update               # 升级 CLI 并同步 skill
+apkpub update --check       # 仅检查新版本
+apkpub update --skill-only  # 仅同步当前版本内置 skill
+```
+
 #### Agent Skill 自动同步
 
 安装本包时（`postinstall`）会自动把内置 skill `using-apkpub-cli`（指导 Agent 如何调用 apkpub）同步到已检测到的 Agent skills 目录：`~/.agents/skills/`、`~/.cursor/skills/`、`~/.hermes/skills/`、`~/.claude/skills/`（仅当对应配置目录存在时安装）。
