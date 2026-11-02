@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { lookup } from 'node:dns/promises';
-import { assertSafeUrl, assertSafeUrlAsync, withRetry } from './http.js';
+import { assertSafeUrl, assertSafeUrlAsync, ensureJsonObject, sleep, withRetry } from './http.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 
 vi.mock('node:dns/promises', () => ({
@@ -58,6 +58,19 @@ describe('assertSafeUrl', () => {
     'http://[fc00::1]/x',
     'http://[fe80::1]/x',
     'http://2130706433/x',
+    'http://[::ffff:127.0.0.1]/x',
+    'http://[::ffff:7f00:1]/x',
+    'http://[::ffff:a9fe:a9fe]/x',
+    'http://[::ffff:10.0.0.1]/x',
+    'http://[::127.0.0.1]/x',
+    'http://[64:ff9b::a00:1]/x',
+    'http://[::]/x',
+    'http://[fd12::1]/x',
+    'http://100.64.0.1/x',
+    'http://0x7f.1/x',
+    'http://224.0.0.1/x',
+    'http://255.255.255.255/x',
+    'http://foo.localhost/x',
   ])('拒绝内网地址 %s', (url) => {
     try {
       assertSafeUrl(url);
@@ -65,6 +78,22 @@ describe('assertSafeUrl', () => {
     } catch (err) {
       expect((err as ApkpubError).code).toBe(ErrorCode.SSRF_BLOCKED);
     }
+  });
+
+  it.each([
+    'https://8.8.8.8/x',
+    'https://[2001:4860:4860::8888]/x',
+    'https://[::ffff:8.8.8.8]/x',
+    'https://172.32.0.1/x',
+  ])('允许公网地址 %s', (url) => {
+    expect(() => assertSafeUrl(url)).not.toThrow();
+  });
+
+  it('拒绝 DNS 解析到 IPv4 映射的回环地址', async () => {
+    vi.mocked(lookup).mockResolvedValueOnce([{ address: '::ffff:127.0.0.1', family: 6 }] as never);
+    await expect(assertSafeUrlAsync('https://rebind.example.com/x')).rejects.toMatchObject({
+      code: ErrorCode.SSRF_BLOCKED,
+    });
   });
 });
 
@@ -126,5 +155,62 @@ describe('withRetry', () => {
     const fn = vi.fn().mockResolvedValue('ok');
     await expect(withRetry(fn, { signal: controller.signal })).rejects.toBeInstanceOf(ApkpubError);
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('sleep', () => {
+  it('取消时立即以「操作已取消」拒绝', async () => {
+    const controller = new AbortController();
+    const pending = sleep(60_000, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: ErrorCode.TIMEOUT, retryable: false });
+  });
+
+  it('信号已取消时直接拒绝', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(sleep(10, controller.signal)).rejects.toBeInstanceOf(ApkpubError);
+  });
+
+  it('正常结束后移除 abort 监听', async () => {
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+    await sleep(1, controller.signal);
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+});
+
+describe('withRetry 取消', () => {
+  it('执行过程中被取消时不再重试', async () => {
+    const controller = new AbortController();
+    const fn = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      throw new Error('network');
+    });
+    await expect(withRetry(fn, { retries: 3, delayMs: 0, signal: controller.signal })).rejects.toMatchObject({
+      code: ErrorCode.TIMEOUT,
+    });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ensureJsonObject', () => {
+  it('对象原样返回', () => {
+    expect(ensureJsonObject({ a: 1 }, { channel: 'x', step: 's' })).toEqual({ a: 1 });
+  });
+
+  it.each([
+    ['<html>502</html>', 502, true],
+    [undefined, 200, false],
+    [[], 200, false],
+  ])('非对象响应 %j (HTTP %s) 抛错，retryable=%s', (data, status, retryable) => {
+    try {
+      ensureJsonObject(data, { channel: 'oppo', step: '获取token', status });
+      expect.unreachable('应当抛出异常');
+    } catch (err) {
+      expect((err as ApkpubError).code).toBe(ErrorCode.CHANNEL_UPLOAD_FAILED);
+      expect((err as ApkpubError).retryable).toBe(retryable);
+      expect((err as ApkpubError).channel).toBe('oppo');
+    }
   });
 });

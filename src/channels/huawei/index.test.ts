@@ -69,6 +69,7 @@ describe('huaweiChannel.getMarketState', () => {
 
     const state = await huaweiChannel.getMarketState!(pkg, config);
     expect(state?.reviewState).toBe(expected);
+    expect(state?.enableSubmit).toBe(expected !== 'reviewing');
     expect(state?.lastVersionCode).toBe(99);
   });
 
@@ -111,6 +112,30 @@ describe('huaweiChannel.upload', () => {
     await expect(huaweiChannel.upload(makeCtx(pkg))).rejects.toBeInstanceOf(ApkpubError);
   });
 
+  it('token 业务码非 0 视为鉴权失败，不自动重试', async () => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    const scope = nock(HOST)
+      .post('/api/oauth2/v1/token')
+      .times(1)
+      .reply(200, { ret: { code: 203, msg: 'client secret invalid' } });
+
+    await expect(huaweiChannel.upload(makeCtx(pkg))).rejects.toMatchObject({ step: 'getToken', retryable: false });
+    expect(scope.isDone()).toBe(true);
+  });
+
+  it('等待编译期间取消可立即中止', async () => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    mockUntilBind({}, ['pkg-ver-1']);
+    const controller = new AbortController();
+    const ctx = { ...makeCtx(pkg), signal: controller.signal };
+    ctx.onProgress = ({ step }) => {
+      if (step === 'waitCompile') setTimeout(() => controller.abort(), 10);
+    };
+    const start = Date.now();
+    await expect(huaweiChannel.upload(ctx)).rejects.toMatchObject({ code: 'TIMEOUT', message: '操作已取消' });
+    expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
   it('完整链路提交成功（含编译轮询与提交校验）', async () => {
     const pkg = `com.test.${randomUUID().slice(0, 8)}`;
     mockToken();
@@ -128,7 +153,13 @@ describe('huaweiChannel.upload', () => {
       .get('/api/publish/v2/package/compile/status')
       .query(true)
       .reply(200, { ret: { code: 0 }, pkgStateList: [{ pkgId: 'pkg-ver-1', successStatus: 0 }] });
-    nock(HOST).put('/api/publish/v2/app-language-info').query(true).reply(200, { ret: { code: 0 } });
+    nock(HOST)
+      .put(
+        '/api/publish/v2/app-language-info',
+        (body: Record<string, unknown>) => body.newFeatures === makeCtx(pkg).desc && body.appDesc === undefined,
+      )
+      .query(true)
+      .reply(200, { ret: { code: 0 } });
     nock(HOST).post('/api/publish/v2/app-submit').query(true).reply(200, { ret: { code: 0 } });
 
     const result = await huaweiChannel.upload(makeCtx(pkg));

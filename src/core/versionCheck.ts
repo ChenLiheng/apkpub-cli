@@ -5,6 +5,14 @@ import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 /** 校验 APK 版本号是否大于线上版本 */
 export function checkVersion(apkInfo: ApkInfo, marketInfo: MarketInfo | undefined, channelName: string): void {
   if (!marketInfo) return;
+  if (!Number.isFinite(marketInfo.lastVersionCode)) {
+    throw new ApkpubError({
+      code: ErrorCode.CHANNEL_STATE_FAILED,
+      channel: channelName,
+      message: `无法解析市场返回的线上版本号(${String(marketInfo.lastVersionCode)})，已中止以免跳过版本校验`,
+      retryable: false,
+    });
+  }
   if (apkInfo.versionCode <= marketInfo.lastVersionCode) {
     throw new ApkpubError({
       code: ErrorCode.VERSION_TOO_LOW,
@@ -13,6 +21,17 @@ export function checkVersion(apkInfo: ApkInfo, marketInfo: MarketInfo | undefine
       retryable: false,
     });
   }
+}
+
+/** 校验市场当前状态是否允许提交新版本（如审核中不可重复提交） */
+export function checkSubmittable(marketInfo: MarketInfo | undefined, channelName: string): void {
+  if (!marketInfo || marketInfo.enableSubmit) return;
+  throw new ApkpubError({
+    code: ErrorCode.CHANNEL_NOT_SUBMITTABLE,
+    channel: channelName,
+    message: `当前市场状态(${marketInfo.reviewState})不允许提交新版本，请等待审核结束后再发布`,
+    retryable: false,
+  });
 }
 
 /** 校验 APK 包名是否匹配配置 */

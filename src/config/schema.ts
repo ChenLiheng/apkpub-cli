@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSensitiveKey } from '../utils/redaction.js';
 
 export const CURRENT_SCHEMA_VERSION = 1;
 
@@ -98,29 +99,28 @@ export function migrateConfig(raw: unknown): AppConfig {
 
 /** 剥离敏感字段用于导出 */
 export function stripSecrets(config: AppConfig): AppConfig {
-  const sensitiveKeys = [
-    'client_secret',
-    'privateKey',
-    'access_key_secret',
-    'accessKeySecret',
-    'signKey',
-    'password',
-  ];
   const stripped = structuredClone(config);
   for (const ch of stripped.channels) {
     if ('params' in ch) {
       for (const p of ch.params) {
-        if (sensitiveKeys.some((k) => p.name.toLowerCase().includes(k.toLowerCase()))) {
+        if (isSensitiveKey(p.name)) {
           p.value = '';
         }
       }
     }
-    if (ch.type === 'custom' && ch.auth) {
-      if (ch.auth.mode === 'ak') {
-        ch.auth.accessKeyId = '';
-        ch.auth.accessKeySecret = '';
-      } else {
-        ch.auth.signKey = '';
+    if (ch.type === 'custom') {
+      if (ch.auth) {
+        if (ch.auth.mode === 'ak') {
+          ch.auth.accessKeyId = '';
+          ch.auth.accessKeySecret = '';
+        } else {
+          ch.auth.signKey = '';
+        }
+      }
+      if (ch.headers) {
+        for (const key of Object.keys(ch.headers)) {
+          if (isSensitiveKey(key)) ch.headers[key] = '';
+        }
       }
     }
   }

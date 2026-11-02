@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import FormData from 'form-data';
 import type { CustomChannelConfig } from '../../config/schema.js';
@@ -41,19 +41,22 @@ export async function uploadToHttp(ctx: UploadContext, config: CustomChannelConf
   ctx.onProgress({ step: 'uploading', percent: 0 });
 
   if (method === 'PUT') {
-    const data = await readFile(ctx.filePath);
+    // 流式上传避免大 APK 整包读入内存；显式 Content-Length 以兼容预签名 PUT
+    const { size } = await stat(ctx.filePath);
     const response = await client.request({
       method: 'PUT',
       url: uploadUrl,
-      data,
+      data: createReadStream(ctx.filePath),
       headers: {
         'Content-Type': 'application/vnd.android.package-archive',
+        'Content-Length': String(size),
         ...config.headers,
       },
       maxBodyLength: Infinity,
       signal: ctx.signal,
       onUploadProgress: (e) => {
-        if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
+        const total = e.total ?? size;
+        if (total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / total) * 100) });
       },
     });
     checkUploadResponse(response.status);

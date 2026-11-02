@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
 import { MarketStateCache } from '../marketCache.js';
-import { createHttpClient } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject } from '../../utils/http.js';
 import { fileMd5 } from '../../utils/files.js';
 import { rsaEncrypt } from '../../signers/rsa.js';
 import { md5Hex } from '../../signers/md5.js';
@@ -58,8 +58,8 @@ export const miChannel: Channel = {
     const resp = await client.post(QUERY_URL, form.toString(), {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
     });
-    checkMiResult(resp.data, '获取App信息');
-    const info = packageInfoSchema.parse((resp.data?.packageInfo ?? resp.data) ?? {});
+    const queryData = checkMiResult(resp.data, '获取App信息', resp.status);
+    const info = packageInfoSchema.parse(queryData.packageInfo ?? queryData);
     const marketState = {
       reviewState: 'online' as const,
       enableSubmit: true,
@@ -76,13 +76,22 @@ export const miChannel: Channel = {
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
     ctx.onProgress({ step: 'getAppInfo' });
-    const marketState = await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
-    const cachedAppName = (queryCache.get(ctx.apkInfo.applicationId)?.appName || marketState?.lastVersionName) ?? ctx.apkInfo.versionName;
+    await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
+    const appName = queryCache.get(ctx.apkInfo.applicationId)?.appName || ctx.apkInfo.appName;
+    if (!appName) {
+      throw new ApkpubError({
+        code: ErrorCode.CHANNEL_STATE_FAILED,
+        channel: 'mi',
+        step: 'getAppInfo',
+        message: '无法获取应用名：小米接口未返回 appName，且 APK 中未解析到应用名',
+        retryable: false,
+      });
+    }
     const requestData = JSON.stringify({
       userName: creds.account,
       synchroType: 1,
       appInfo: {
-        appName: cachedAppName,
+        appName,
         packageName: ctx.apkInfo.applicationId,
         updateDesc: ctx.desc,
       },
@@ -97,7 +106,7 @@ export const miChannel: Channel = {
     form.append('apk', createReadStream(ctx.filePath), { filename: 'app.apk' });
     form.append('RequestData', requestData);
     form.append('SIG', rsaEncrypt(sigData, creds.publicKey));
-    const client = createHttpClient({ timeout: 600_000 });
+    const client = createHttpClient({ timeout: 600_000, signal: ctx.signal });
     const resp = await client.post(PUSH_URL, form, {
       headers: form.getHeaders(),
       maxBodyLength: Infinity,
@@ -105,19 +114,23 @@ export const miChannel: Channel = {
         if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
       },
     });
-    checkMiResult(resp.data, '上传Apk');
+    checkMiResult(resp.data, '上传Apk', resp.status);
     ctx.onProgress({ step: 'done', percent: 100 });
     return { message: '提交成功' };
   },
 };
 
-function checkMiResult(data: { result?: number; message?: string }, action: string): void {
+/** 校验小米业务返回码，返回已校验的响应对象 */
+function checkMiResult(raw: unknown, action: string, status?: number): Record<string, any> {
+  const data = ensureJsonObject(raw, { channel: 'mi', step: action, status });
   if (data.result !== 0) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
       channel: 'mi',
+      step: action,
       message: `${action}失败: ${data.message ?? '未知错误'}`,
       retryable: false,
     });
   }
+  return data;
 }
