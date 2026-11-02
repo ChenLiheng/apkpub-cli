@@ -1,0 +1,88 @@
+name: Publish to npm
+
+# 推送形如 v1.2.3 / v1.2.3-beta.1 的 tag 时触发发布；也支持手动触发（仅用于 dry-run 验证）
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '仅演练（不真正发布）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # 创建 GitHub Release
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag ($TAG_VERSION) 与 package.json 版本 ($PKG_VERSION) 不一致"
+            exit 1
+          fi
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Resolve npm dist-tag
+        id: dist
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          # 预发布版本（如 1.0.0-beta.1）使用对应 preid 作为 dist-tag，正式版为 latest
+          if [[ "$VERSION" == *-* ]]; then
+            PREID=$(echo "$VERSION" | sed -E 's/^[^-]+-([A-Za-z]+).*/\1/')
+            echo "tag=$PREID" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish (dry-run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: pnpm publish --dry-run --no-git-checks --tag ${{ steps.dist.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm publish --no-git-checks --provenance --access public --tag ${{ steps.dist.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ steps.dist.outputs.prerelease == 'true' }}
