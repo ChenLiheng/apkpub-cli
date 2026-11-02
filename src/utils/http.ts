@@ -6,6 +6,7 @@ import { redactMessage } from './redaction.js';
 
 const PRIVATE_IP_PATTERNS = [
   /^localhost$/i,
+  /\.localhost$/i,
   /^127\./,
   /^10\./,
   /^172\.(1[6-9]|2\d|3[01])\./,
@@ -47,33 +48,70 @@ function parseIPv4(host: string): number[] | null {
   return nums.every((n) => !Number.isNaN(n)) ? nums : null;
 }
 
+/** 禁止访问的 IPv4 网段：本机 / 私网 / 链路本地 / CGNAT / 保留 / 组播 / 广播 */
+const BLOCKED_IPV4_RANGES: [number, number, number, number, number][] = [
+  [0, 0, 0, 0, 8],
+  [10, 0, 0, 0, 8],
+  [100, 64, 0, 0, 10],
+  [127, 0, 0, 0, 8],
+  [169, 254, 0, 0, 16],
+  [172, 16, 0, 0, 12],
+  [192, 0, 0, 0, 24],
+  [192, 168, 0, 0, 16],
+  [198, 18, 0, 0, 15],
+  [224, 0, 0, 0, 4],
+  [240, 0, 0, 0, 4],
+];
+
+function ipv4ToInt(parts: number[]): number {
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
 function isPrivateIPv4(host: string): boolean {
   const parts = parseIPv4(host);
   if (!parts) return false;
-  const [a, b] = parts;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
-  );
+  const value = ipv4ToInt(parts);
+  return BLOCKED_IPV4_RANGES.some(([a, b, c, d, bits]) => {
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return ((value & mask) >>> 0) === ((ipv4ToInt([a, b, c, d]) & mask) >>> 0);
+  });
+}
+
+/** 将 IPv6 地址展开为 8 组 16 位整数，非法时返回 null */
+function expandIPv6(host: string): number[] | null {
+  let addr = normalizeHost(host);
+  if (net.isIPv6(addr) === false) return null;
+  // 末尾内嵌 IPv4（如 ::ffff:127.0.0.1）转换为两组十六进制
+  const embedded = addr.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (embedded) {
+    const v4 = parseIPv4(embedded[2]);
+    if (!v4) return null;
+    addr = `${embedded[1]}${((v4[0] << 8) | v4[1]).toString(16)}:${((v4[2] << 8) | v4[3]).toString(16)}`;
+  }
+  const [head, tail] = addr.split('::');
+  const headParts = head ? head.split(':') : [];
+  const tailParts = tail !== undefined && tail !== '' ? tail.split(':') : [];
+  const fill = tail !== undefined ? 8 - headParts.length - tailParts.length : 0;
+  const groups = [...headParts, ...Array(fill).fill('0'), ...tailParts].map((g) => parseInt(g, 16));
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
 }
 
 function isPrivateIPv6(host: string): boolean {
-  const normalized = normalizeHost(host);
-  return (
-    normalized === '::1' ||
-    normalized === '::' ||
-    normalized.startsWith('fc') ||
-    normalized.startsWith('fd') ||
-    normalized.startsWith('fe80:') ||
-    normalized.startsWith('::ffff:127.') ||
-    normalized.startsWith('::ffff:10.') ||
-    normalized.startsWith('::ffff:192.168.') ||
-    /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(normalized)
-  );
+  const g = expandIPv6(host);
+  if (!g) return false;
+  const allZeroPrefix = (n: number) => g.slice(0, n).every((x) => x === 0);
+  // :: 与 ::1
+  if (allZeroPrefix(7) && (g[7] === 0 || g[7] === 1)) return true;
+  // IPv4 映射（::ffff:a.b.c.d）、IPv4 兼容（::a.b.c.d）、NAT64（64:ff9b::/96）：按内嵌 IPv4 判断
+  const isMapped = allZeroPrefix(5) && g[5] === 0xffff;
+  const isCompat = allZeroPrefix(6);
+  const isNat64 = g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0);
+  if (isMapped || isCompat || isNat64) {
+    const v4 = `${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`;
+    return isPrivateIPv4(v4);
+  }
+  // fc00::/7 唯一本地地址、fe80::/10 链路本地、ff00::/8 组播
+  return (g[0] & 0xfe00) === 0xfc00 || (g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xff00) === 0xff00;
 }
 
 function isBlockedHost(host: string): boolean {
