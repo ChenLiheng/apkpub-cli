@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { logger } from '../utils/logger.js';
+import type { CustomChannelConfig } from '../config/schema.js';
 
 const SALT = 'apkpub-salt';
 const KEY_LENGTH = 32;
@@ -69,6 +70,36 @@ export async function resolveConfigSecrets(
     }),
   );
   return Object.fromEntries(resolved);
+}
+
+/** 解析自定义渠道 auth 与 headers 中的密钥占位符，返回新的配置对象 */
+export async function resolveCustomChannelSecrets(
+  config: CustomChannelConfig,
+  options: ResolveOptions = {},
+): Promise<CustomChannelConfig> {
+  const resolveValue = async (value: string): Promise<string> =>
+    value.length > 0 ? (await resolveSecret(value, options)).value : value;
+
+  let auth = config.auth;
+  if (auth?.mode === 'ak') {
+    auth = {
+      ...auth,
+      accessKeyId: await resolveValue(auth.accessKeyId),
+      accessKeySecret: await resolveValue(auth.accessKeySecret),
+    };
+  } else if (auth?.mode === 'sts') {
+    auth = { ...auth, signKey: await resolveValue(auth.signKey) };
+  }
+
+  let headers = config.headers;
+  if (headers) {
+    const entries = await Promise.all(
+      Object.entries(headers).map(async ([key, val]) => [key, await resolveValue(val)] as const),
+    );
+    headers = Object.fromEntries(entries);
+  }
+
+  return { ...config, auth, headers };
 }
 
 async function resolveFromKeychain(service: string, account: string): Promise<string> {

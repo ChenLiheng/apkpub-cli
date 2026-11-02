@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
 import { MarketStateCache } from '../marketCache.js';
-import { createHttpClient } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject } from '../../utils/http.js';
 import { fileMd5 } from '../../utils/files.js';
 import { vivoSignParams } from '../../signers/hmac.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
@@ -49,8 +49,7 @@ export const vivoChannel: Channel = {
     const client = createHttpClient();
     const url = buildUrl('app.query.details', { packageName: appId }, creds.access_key, creds.access_secret);
     const resp = await client.get(url);
-    checkVivoResult(resp.data, '查询应用详情');
-    const data = appDetailSchema.parse(resp.data?.data ?? {});
+    const data = appDetailSchema.parse(checkVivoResult(resp.data, '查询应用详情', resp.status).data ?? {});
     const marketState = {
       reviewState: 'online' as const,
       enableSubmit: true,
@@ -65,7 +64,7 @@ export const vivoChannel: Channel = {
   },
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
-    const client = createHttpClient({ timeout: 600_000 });
+    const client = createHttpClient({ timeout: 600_000, signal: ctx.signal });
     ctx.onProgress({ step: 'getAppInfo' });
     await vivoChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
     const cached = queryCache.get(ctx.apkInfo.applicationId);
@@ -87,8 +86,7 @@ export const vivoChannel: Channel = {
         if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
       },
     });
-    checkVivoResult(uploadResp.data, '上传apk');
-    const apkResult = uploadResp.data.data;
+    const apkResult = checkVivoResult(uploadResp.data, '上传apk', uploadResp.status).data ?? {};
     ctx.onProgress({ step: 'submit' });
     const submitUrl = buildUrl(
       'app.sync.update.app',
@@ -105,20 +103,24 @@ export const vivoChannel: Channel = {
       creds.access_secret,
     );
     const submitResp = await client.get(submitUrl);
-    checkVivoResult(submitResp.data, '提交更新');
+    checkVivoResult(submitResp.data, '提交更新', submitResp.status);
     ctx.onProgress({ step: 'done', percent: 100 });
     return { message: '提交成功' };
   },
 };
 
-function checkVivoResult(data: { code?: number; subCode?: string; msg?: string }, action: string): void {
+/** 校验 VIVO 业务返回码，返回已校验的响应对象 */
+function checkVivoResult(raw: unknown, action: string, status?: number): Record<string, any> {
+  const data = ensureJsonObject(raw, { channel: 'vivo', step: action, status });
   const subCode = Number(data.subCode ?? -1);
   if (data.code !== 0 || subCode !== 0) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
       channel: 'vivo',
+      step: action,
       message: `${action}失败: ${data.msg ?? '未知错误'}`,
       retryable: false,
     });
   }
+  return data;
 }

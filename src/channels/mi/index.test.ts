@@ -78,6 +78,52 @@ describe('miChannel.upload', () => {
     expect(result.message).toContain('成功');
   });
 
+  it('提交时使用小米返回的 appName，而不是版本号', async () => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    nock(HOST)
+      .post(`${BASE}/dev/query`)
+      .reply(200, { result: 0, packageInfo: { versionCode: 55, versionName: '4.0.0', appName: '测试应用' } });
+    let requestBody = '';
+    nock(HOST)
+      .post(`${BASE}/dev/push`, (body: string) => {
+        requestBody = body;
+        return true;
+      })
+      .reply(200, { result: 0 });
+
+    await miChannel.upload(makeCtx(pkg));
+    expect(requestBody).toContain('"appName":"测试应用"');
+  });
+
+  it('接口未返回 appName 时回退到 APK 解析出的应用名', async () => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    nock(HOST)
+      .post(`${BASE}/dev/query`)
+      .reply(200, { result: 0, packageInfo: { versionCode: 55, versionName: '4.0.0' } });
+    let requestBody = '';
+    nock(HOST)
+      .post(`${BASE}/dev/push`, (body: string) => {
+        requestBody = body;
+        return true;
+      })
+      .reply(200, { result: 0 });
+
+    const ctx = makeCtx(pkg);
+    ctx.apkInfo.appName = 'APK应用名';
+    await miChannel.upload(ctx);
+    expect(requestBody).toContain('"appName":"APK应用名"');
+    expect(requestBody).not.toContain('"appName":"4.0.0"');
+  });
+
+  it('两处都拿不到 appName 时报错且不上传', async () => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    nock(HOST)
+      .post(`${BASE}/dev/query`)
+      .reply(200, { result: 0, packageInfo: { versionCode: 55, versionName: '4.0.0' } });
+
+    await expect(miChannel.upload(makeCtx(pkg))).rejects.toMatchObject({ code: 'CHANNEL_STATE_FAILED' });
+  });
+
   it('上传接口业务码非 0 时抛错', async () => {
     const pkg = `com.test.${randomUUID().slice(0, 8)}`;
     nock(HOST)

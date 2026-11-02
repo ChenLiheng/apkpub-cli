@@ -1,14 +1,16 @@
 import { z } from 'zod';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import FormData from 'form-data';
 import type { Channel, UploadContext } from '../Channel.js';
-import { createHttpClient } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, withRetry } from '../../utils/http.js';
 import { fileSha256 } from '../../utils/files.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
+import { createReadStream } from 'node:fs';
 
 const BASE_URL = 'https://appmarket-openapi-drcn.cloud.honor.com';
 const TOKEN_URL = 'https://iam.developer.honor.com/auth/token';
+/** APK 文件上传超时（大包上传耗时较长） */
+const UPLOAD_TIMEOUT_MS = 600_000;
 
 const credSchema = z.object({
   client_id: z.string().min(1),
@@ -24,8 +26,8 @@ const releaseInfoSchema = z
   })
   .passthrough();
 
-async function getToken(clientId: string, clientSecret: string): Promise<string> {
-  const client = createHttpClient();
+async function getToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
+  const client = createHttpClient({ signal });
   const resp = await client.post(
     TOKEN_URL,
     new URLSearchParams({
@@ -40,19 +42,19 @@ async function getToken(clientId: string, clientSecret: string): Promise<string>
     code: ErrorCode.CHANNEL_AUTH_FAILED,
     channel: 'honor',
     step: 'getToken',
-    message: `获取 token 失败`,
-    retryable: false,
+    message: `获取 token 失败 (HTTP ${resp.status})`,
+    // 网关 5xx 可重试，凭证错误等 4xx 不重试
+    retryable: resp.status >= 500,
   });
 }
 
-async function getAppId(token: string, packageName: string): Promise<string> {
-  const client = createHttpClient();
+async function getAppId(token: string, packageName: string, signal?: AbortSignal): Promise<string> {
+  const client = createHttpClient({ signal });
   const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-id`, {
     headers: { Authorization: `Bearer ${token}` },
     params: { pkgName: packageName },
   });
-  checkHonorResult(resp.data, 'getAppId');
-  const list = resp.data.data ?? [];
+  const list = checkHonorResult(resp.data, 'getAppId', resp.status).data ?? [];
   if (!list.length) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_STATE_FAILED,
@@ -64,7 +66,9 @@ async function getAppId(token: string, packageName: string): Promise<string> {
   return list[0].appId;
 }
 
-function checkHonorResult(data: { code?: number; message?: string; msg?: string }, action: string): void {
+/** 校验荣耀业务返回码，返回已校验的响应对象 */
+function checkHonorResult(raw: unknown, action: string, status?: number): Record<string, any> {
+  const data = ensureJsonObject(raw, { channel: 'honor', step: action, status });
   if (data.code !== 0) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
@@ -75,6 +79,7 @@ function checkHonorResult(data: { code?: number; message?: string; msg?: string 
       retryable: false,
     });
   }
+  return data;
 }
 
 export const honorChannel: Channel = {
@@ -127,39 +132,48 @@ export const honorChannel: Channel = {
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
     const fileName = path.basename(ctx.filePath);
+    const { signal } = ctx;
+    const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
     ctx.onProgress({ step: 'getToken' });
-    const token = await getToken(creds.client_id, creds.client_secret);
+    const token = await retry(() => getToken(creds.client_id, creds.client_secret, signal));
     const auth = `Bearer ${token}`;
     ctx.onProgress({ step: 'getAppId' });
-    const appId = await getAppId(token, ctx.apkInfo.applicationId);
-    const client = createHttpClient();
+    const appId = await retry(() => getAppId(token, ctx.apkInfo.applicationId, signal));
+    const client = createHttpClient({ signal });
     ctx.onProgress({ step: 'getAppInfo' });
-    const appInfoResp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-detail`, {
-      headers: { Authorization: auth },
-      params: { appId },
+    const appInfo = await retry(async () => {
+      const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-detail`, {
+        headers: { Authorization: auth },
+        params: { appId },
+      });
+      return checkHonorResult(resp.data, 'getAppInfo', resp.status);
     });
-    checkHonorResult(appInfoResp.data, 'getAppInfo');
-    const langInfo = appInfoResp.data.data?.languageInfo?.[0] ?? {};
+    const langInfo = appInfo.data?.languageInfo?.[0] ?? {};
     ctx.onProgress({ step: 'getUploadUrl' });
     const sha256 = await fileSha256(ctx.filePath);
-    const uploadUrlResp = await client.post(
-      `${BASE_URL}/openapi/v1/publish/get-file-upload-url`,
-      [{ fileName, fileType: 100, fileSize: ctx.apkInfo.size, fileSha256: sha256 }],
-      { headers: { Authorization: auth }, params: { appId } },
-    );
-    checkHonorResult(uploadUrlResp.data, 'getUploadUrl');
-    const uploadInfo = uploadUrlResp.data.data[0];
-    ctx.onProgress({ step: 'uploading', percent: 0 });
-    // 必须用 Buffer 而不是 createReadStream：form-data 对 Stream 无法计算 Content-Length，
-    // axios 会退化成 chunked 上传，荣耀 file-upload 仍返回 code 0 但文件未入库，
-    // 随后绑定报 20030 objectId is not exists（同华为 OBS 上传的历史坑）
-    const fileBuffer = readFileSync(ctx.filePath);
-    const form = new FormData();
-    form.append('file', fileBuffer, {
-      filename: fileName,
-      contentType: 'application/vnd.android.package-archive',
+    const uploadUrlData = await retry(async () => {
+      const resp = await client.post(
+        `${BASE_URL}/openapi/v1/publish/get-file-upload-url`,
+        [{ fileName, fileType: 100, fileSize: ctx.apkInfo.size, fileSha256: sha256 }],
+        { headers: { Authorization: auth }, params: { appId } },
+      );
+      return checkHonorResult(resp.data, 'getUploadUrl', resp.status);
     });
-    const uploadResp = await client.post(uploadInfo.uploadUrl, form, {
+    const uploadInfo = uploadUrlData.data?.[0];
+    if (!uploadInfo?.url) {
+      throw new ApkpubError({
+        code: ErrorCode.CHANNEL_UPLOAD_FAILED,
+        channel: 'honor',
+        step: 'getUploadUrl',
+        message: `获取上传地址失败: ${JSON.stringify(uploadUrlData)}`,
+        retryable: false,
+      });
+    }
+    ctx.onProgress({ step: 'uploading', percent: 0 });
+    const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS, signal });
+    const form = new FormData();
+    form.append('file', createReadStream(ctx.filePath), { filename: fileName });
+    const uploadResp = await uploadClient.post(uploadInfo.url, form, {
       headers: { Authorization: auth, ...form.getHeaders() },
       maxBodyLength: Infinity,
       onUploadProgress: (e) => {
@@ -171,7 +185,7 @@ export const honorChannel: Channel = {
         code: ErrorCode.CHANNEL_UPLOAD_FAILED,
         channel: 'honor',
         step: 'uploadFile',
-        message: `上传文件失败: ${JSON.stringify(uploadResp.data)}`,
+        message: `上传文件失败 (HTTP ${uploadResp.status}): ${JSON.stringify(uploadResp.data)}`,
         retryable: true,
       });
     }
@@ -183,7 +197,7 @@ export const honorChannel: Channel = {
       { bindingFileList: [{ objectId: uploadInfo.objectId }] },
       { headers: { Authorization: auth }, params: { appId } },
     );
-    checkHonorResult(bindResp.data, 'bindApk');
+    checkHonorResult(bindResp.data, 'bindApk', bindResp.status);
     ctx.onProgress({ step: 'updateDesc' });
     const descResp = await client.post(
       `${BASE_URL}/openapi/v1/publish/update-language-info`,
@@ -199,13 +213,13 @@ export const honorChannel: Channel = {
       },
       { headers: { Authorization: auth }, params: { appId } },
     );
-    checkHonorResult(descResp.data, 'updateDesc');
+    checkHonorResult(descResp.data, 'updateDesc', descResp.status);
     ctx.onProgress({ step: 'submit' });
     const submitResp = await client.post(`${BASE_URL}/openapi/v1/publish/submit-audit`, { releaseType: 1 }, {
       headers: { Authorization: auth },
       params: { appId },
     });
-    checkHonorResult(submitResp.data, 'submit');
+    checkHonorResult(submitResp.data, 'submit', submitResp.status);
     ctx.onProgress({ step: 'done', percent: 100 });
     return { message: '提交审核成功' };
   },
