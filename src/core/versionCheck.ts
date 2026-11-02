@@ -5,6 +5,14 @@ import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 /** 校验 APK 版本号是否大于线上版本 */
 export function checkVersion(apkInfo: ApkInfo, marketInfo: MarketInfo | undefined, channelName: string): void {
   if (!marketInfo) return;
+  if (!Number.isFinite(marketInfo.lastVersionCode)) {
+    throw new ApkpubError({
+      code: ErrorCode.CHANNEL_STATE_FAILED,
+      channel: channelName,
+      message: `无法解析市场返回的线上版本号(${String(marketInfo.lastVersionCode)})，已中止以免跳过版本校验`,
+      retryable: false,
+    });
+  }
   if (apkInfo.versionCode <= marketInfo.lastVersionCode) {
     throw new ApkpubError({
       code: ErrorCode.VERSION_TOO_LOW,

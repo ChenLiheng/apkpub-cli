@@ -68,6 +68,14 @@ describe('checkPackageMatch', () => {
   });
 });
 
+describe('checkVersion 线上版本号异常', () => {
+  it('线上版本号为 NaN 时抛 CHANNEL_STATE_FAILED 而不是放行', () => {
+    expect(() => checkVersion(makeApk(), makeMarket({ lastVersionCode: Number.NaN }), 'mi')).toThrow(
+      expect.objectContaining({ code: ErrorCode.CHANNEL_STATE_FAILED }),
+    );
+  });
+});
+
 describe('checkSubmittable', () => {
   it('线上信息缺失或允许提交时通过', () => {
     expect(() => checkSubmittable(undefined, 'huawei')).not.toThrow();

@@ -38,6 +38,13 @@ export async function parseApk(filePath: string): Promise<ApkInfo> {
         retryable: false,
       });
     }
+    if (!Number.isInteger(versionCode) || versionCode <= 0) {
+      throw new ApkpubError({
+        code: ErrorCode.APK_PARSE_FAILED,
+        message: `无法从 APK 中读取有效的 versionCode: ${String(result.versionCode)}`,
+        retryable: false,
+      });
+    }
     const size = await fileSize(filePath);
     return {
       filePath,
