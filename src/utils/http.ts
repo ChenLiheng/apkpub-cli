@@ -199,13 +199,18 @@ function assertSafeRedirect(options: RedirectOptions): void {
   assertSafeUrl(`${protocol}//${host}${path}`, '重定向地址', { allowHttp: true, warnOnHttp: true });
 }
 
-/** 创建带超时与重试的 HTTP 客户端 */
-export function createHttpClient(options?: { timeout?: number }): AxiosInstance {
+/** 创建带超时、取消信号与重定向校验的 HTTP 客户端 */
+export function createHttpClient(options?: { timeout?: number; signal?: AbortSignal }): AxiosInstance {
   return axios.create({
     timeout: options?.timeout ?? 60_000,
+    signal: options?.signal,
     validateStatus: () => true,
     beforeRedirect: assertSafeRedirect,
   });
+}
+
+function cancelledError(): ApkpubError {
+  return new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false });
 }
 
 /** 带指数退避的重试执行 */
@@ -217,13 +222,12 @@ export async function withRetry<T>(
   const delayMs = options.delayMs ?? 1000;
   let lastError: unknown;
   for (let i = 0; i <= retries; i++) {
-    if (options.signal?.aborted) {
-      throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false });
-    }
+    if (options.signal?.aborted) throw cancelledError();
     try {
       return await fn();
     } catch (err) {
       lastError = err;
+      if (options.signal?.aborted || axios.isCancel(err)) throw cancelledError();
       const retryable = err instanceof ApkpubError ? err.retryable : true;
       if (!retryable || i === retries) break;
       await sleep(delayMs * Math.pow(2, i), options.signal);
@@ -232,13 +236,39 @@ export async function withRetry<T>(
   throw lastError;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+/** 可被取消的延时；取消时抛「操作已取消」 */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
+    if (signal?.aborted) {
+      reject(cancelledError());
+      return;
+    }
+    const onAbort = (): void => {
       clearTimeout(timer);
-      reject(new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false }));
-    });
+      reject(cancelledError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** 校验响应体为 JSON 对象（网关错误页、空响应等返回可重试错误） */
+export function ensureJsonObject(
+  data: unknown,
+  meta: { channel: string; step: string; status?: number },
+): Record<string, any> {
+  if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+    return data as Record<string, any>;
+  }
+  throw new ApkpubError({
+    code: ErrorCode.CHANNEL_UPLOAD_FAILED,
+    channel: meta.channel,
+    step: meta.step,
+    message: `${meta.step} 响应格式无效${meta.status !== undefined ? ` (HTTP ${meta.status})` : ''}`,
+    retryable: meta.status === undefined || meta.status >= 500,
   });
 }
 

@@ -122,11 +122,23 @@ export async function uploadToOss(ctx: UploadContext, config: CustomChannelConfi
   const client = await createOssClient(config);
   ctx.onProgress({ step: 'uploading', percent: 0 });
 
-  await client.multipartUpload(objectKey, ctx.filePath, {
-    progress: (p: number) => {
-      ctx.onProgress({ step: 'uploading', percent: Math.round(p * 100) });
-    },
-  } as Parameters<typeof client.multipartUpload>[2]);
+  // 取消信号触发时中止分片上传
+  const onAbort = (): void => client.cancel();
+  ctx.signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    await client.multipartUpload(objectKey, ctx.filePath, {
+      progress: (p: number) => {
+        ctx.onProgress({ step: 'uploading', percent: Math.round(p * 100) });
+      },
+    } as Parameters<typeof client.multipartUpload>[2]);
+  } catch (err) {
+    if (ctx.signal.aborted) {
+      throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false, cause: err });
+    }
+    throw err;
+  } finally {
+    ctx.signal.removeEventListener('abort', onAbort);
+  }
 
   const downloadUrl = renderTemplate(config.downloadUrlTemplate, {
     appId: ctx.apkInfo.applicationId,

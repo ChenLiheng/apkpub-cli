@@ -2,10 +2,12 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
-import { createHttpClient, withRetry } from '../../utils/http.js';
+import { createHttpClient, sleep, withRetry } from '../../utils/http.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 
 const BASE_URL = 'https://connect-api.cloud.huawei.com';
+/** 编译状态轮询间隔 */
+const COMPILE_POLL_INTERVAL_MS = 10_000;
 
 const credSchema = z.object({
   client_id: z.string().min(1),
@@ -33,7 +35,7 @@ const uploadHeadersSchema = z
   .optional();
 
 /** 检查华为 API 业务返回码，ret.code !== 0 抛异常 */
-function checkHwRet(respData: unknown, step: string, label: string): void {
+function checkHwRet(respData: unknown, step: string, label: string, retryable = true): void {
   const ret = (respData as any)?.ret;
   if (ret && ret.code !== 0) {
     throw new ApkpubError({
@@ -41,19 +43,20 @@ function checkHwRet(respData: unknown, step: string, label: string): void {
       channel: 'huawei',
       step,
       message: `${label}失败: ret.code=${ret.code}, ret.msg=${ret.msg ?? ''}`,
-      retryable: true,
+      retryable,
     });
   }
 }
 
-async function getToken(clientId: string, clientSecret: string): Promise<string> {
-  const client = createHttpClient();
+async function getToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
+  const client = createHttpClient({ signal });
   const resp = await client.post(`${BASE_URL}/api/oauth2/v1/token`, {
     client_id: clientId,
     client_secret: clientSecret,
     grant_type: 'client_credentials',
   });
-  checkHwRet(resp.data, 'getToken', '获取 token');
+  // 鉴权类业务错误（凭证错误等）重试无意义
+  checkHwRet(resp.data, 'getToken', '获取 token', false);
   if (resp.data?.access_token) return resp.data.access_token as string;
   throw new ApkpubError({
     code: ErrorCode.CHANNEL_AUTH_FAILED,
@@ -64,8 +67,13 @@ async function getToken(clientId: string, clientSecret: string): Promise<string>
   });
 }
 
-async function getAppId(clientId: string, token: string, packageName: string): Promise<string> {
-  const client = createHttpClient();
+async function getAppId(
+  clientId: string,
+  token: string,
+  packageName: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const client = createHttpClient({ signal });
   const resp = await client.get(`${BASE_URL}/api/publish/v2/appid-list`, {
     headers: { client_id: clientId, Authorization: `Bearer ${token}` },
     params: { packageName },
@@ -90,8 +98,9 @@ async function getUploadUrl(
   appId: string,
   fileName: string,
   contentLength: number,
+  signal?: AbortSignal,
 ): Promise<{ url: string; objectId: string; headers: Record<string, string> }> {
-  const client = createHttpClient();
+  const client = createHttpClient({ signal });
   const resp = await client.get(`${BASE_URL}/api/publish/v2/upload-url/for-obs`, {
     headers: { client_id: clientId, Authorization: `Bearer ${token}` },
     params: { appId, fileName, contentLength },
@@ -128,8 +137,9 @@ async function uploadFile(
   headers: Record<string, string>,
   filePath: string,
   onProgress: (p: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const client = createHttpClient({ timeout: 600_000 });
+  const client = createHttpClient({ timeout: 600_000, signal });
   // 以流方式上传避免大 APK 整包读入内存；显式带 Content-Length 满足 OBS 预签名 PUT 的长度校验
   const contentLength = fs.statSync(filePath).size;
   const stream = fs.createReadStream(filePath);
@@ -159,8 +169,9 @@ async function bindApk(
   appId: string,
   fileName: string,
   objectId: string,
+  signal?: AbortSignal,
 ): Promise<{ pkgId: string }> {
-  const client = createHttpClient();
+  const client = createHttpClient({ signal });
   const resp = await client.put(
     `${BASE_URL}/api/publish/v2/app-file-info`,
     { fileType: 5, files: [{ fileName, fileDestUrl: objectId }] },
@@ -187,12 +198,12 @@ async function waitApkReady(
   pkgId: string,
   signal: AbortSignal,
 ): Promise<void> {
-  const client = createHttpClient();
+  const client = createHttpClient({ signal });
   const start = Date.now();
   const timeout = 3 * 60 * 1000;
   while (Date.now() - start < timeout) {
-    if (signal.aborted) throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '等待编译超时', retryable: false });
-    await new Promise((r) => setTimeout(r, 10_000));
+    // 可被取消的轮询间隔，取消时抛「操作已取消」
+    await sleep(COMPILE_POLL_INTERVAL_MS, signal);
     const resp = await client.get(`${BASE_URL}/api/publish/v2/package/compile/status`, {
       headers: { client_id: clientId, Authorization: `Bearer ${token}` },
       params: { appId, pkgIds: pkgId },
@@ -243,22 +254,26 @@ export const huaweiChannel: Channel = {
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
     const fileName = path.basename(ctx.filePath);
+    const { signal } = ctx;
+    const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
     ctx.onProgress({ step: 'getToken' });
-    const token = await withRetry(() => getToken(creds.client_id, creds.client_secret));
+    const token = await retry(() => getToken(creds.client_id, creds.client_secret, signal));
     ctx.onProgress({ step: 'getAppId' });
-    const appId = await getAppId(creds.client_id, token, ctx.apkInfo.applicationId);
+    const appId = await retry(() => getAppId(creds.client_id, token, ctx.apkInfo.applicationId, signal));
     ctx.onProgress({ step: 'getUploadUrl' });
-    const uploadInfo = await getUploadUrl(creds.client_id, token, appId, fileName, ctx.apkInfo.size);
+    const uploadInfo = await retry(() =>
+      getUploadUrl(creds.client_id, token, appId, fileName, ctx.apkInfo.size, signal),
+    );
     ctx.onProgress({ step: 'uploading', percent: 0 });
-    await uploadFile(uploadInfo.url, uploadInfo.headers, ctx.filePath, (p) =>
-      ctx.onProgress({ step: 'uploading', percent: p }),
+    await retry(() =>
+      uploadFile(uploadInfo.url, uploadInfo.headers, ctx.filePath, (p) => ctx.onProgress({ step: 'uploading', percent: p }), signal),
     );
     ctx.onProgress({ step: 'bindApk' });
-    const bind = await bindApk(creds.client_id, token, appId, fileName, uploadInfo.objectId);
+    const bind = await bindApk(creds.client_id, token, appId, fileName, uploadInfo.objectId, signal);
     ctx.onProgress({ step: 'waitCompile' });
-    await waitApkReady(creds.client_id, token, appId, bind.pkgId, ctx.signal);
+    await waitApkReady(creds.client_id, token, appId, bind.pkgId, signal);
     ctx.onProgress({ step: 'updateDesc' });
-    const client = createHttpClient();
+    const client = createHttpClient({ signal });
     const descResp = await client.put(
       `${BASE_URL}/api/publish/v2/app-language-info`,
       // newFeatures 为「新版本特性」；appDesc 是应用详细介绍，不能用更新说明覆盖
