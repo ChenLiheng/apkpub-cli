@@ -260,7 +260,8 @@ export const huaweiChannel: Channel = {
     const client = createHttpClient();
     const descResp = await client.put(
       `${BASE_URL}/api/publish/v2/app-language-info`,
-      { lang: 'zh-CN', appDesc: ctx.desc },
+      // newFeatures 为「新版本特性」；appDesc 是应用详细介绍，不能用更新说明覆盖
+      { lang: 'zh-CN', newFeatures: ctx.desc },
       { headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` }, params: { appId } },
     );
     checkHwRet(descResp.data, 'updateDesc', '更新版本描述');

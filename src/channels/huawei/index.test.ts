@@ -128,7 +128,13 @@ describe('huaweiChannel.upload', () => {
       .get('/api/publish/v2/package/compile/status')
       .query(true)
       .reply(200, { ret: { code: 0 }, pkgStateList: [{ pkgId: 'pkg-ver-1', successStatus: 0 }] });
-    nock(HOST).put('/api/publish/v2/app-language-info').query(true).reply(200, { ret: { code: 0 } });
+    nock(HOST)
+      .put(
+        '/api/publish/v2/app-language-info',
+        (body: Record<string, unknown>) => body.newFeatures === makeCtx(pkg).desc && body.appDesc === undefined,
+      )
+      .query(true)
+      .reply(200, { ret: { code: 0 } });
     nock(HOST).post('/api/publish/v2/app-submit').query(true).reply(200, { ret: { code: 0 } });
 
     const result = await huaweiChannel.upload(makeCtx(pkg));
