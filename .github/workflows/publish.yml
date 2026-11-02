@@ -32,6 +32,10 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      # Trusted Publishing（OIDC）要求 npm CLI >= 11.5.1
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -71,14 +75,10 @@ jobs:
       - name: Publish (dry-run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: pnpm publish --dry-run --no-git-checks --tag ${{ steps.dist.outputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/v')
         run: pnpm publish --no-git-checks --provenance --access public --tag ${{ steps.dist.outputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
