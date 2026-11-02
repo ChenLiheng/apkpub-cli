@@ -11,12 +11,14 @@ const SENSITIVE_KEYS = [
   'signkey',
   'sign_key',
   'authorization',
+  'apikey',
+  'cookie',
 ];
 
 const REDACTED = '***REDACTED***';
 
 /** 判断键名是否为敏感字段 */
-function isSensitiveKey(key: string): boolean {
+export function isSensitiveKey(key: string): boolean {
   const lower = key.toLowerCase().replace(/[-_]/g, '');
   return SENSITIVE_KEYS.some((k) => lower.includes(k.replace(/[-_]/g, '')));
 }

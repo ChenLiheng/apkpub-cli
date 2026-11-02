@@ -108,6 +108,59 @@ describe('stripSecrets', () => {
     }
   });
 
+  it('应清空 VIVO access_secret 与小米 privateKey，保留非敏感字段', () => {
+    const config: AppConfig = {
+      ...baseConfig(),
+      channels: [
+        {
+          name: 'vivo',
+          type: 'market',
+          enable: true,
+          params: [
+            { name: 'access_key', value: 'vivo-ak' },
+            { name: 'access_secret', value: 'vivo-secret' },
+          ],
+        },
+        {
+          name: 'mi',
+          type: 'market',
+          enable: true,
+          params: [
+            { name: 'account', value: 'dev@example.com' },
+            { name: 'publicKey', value: 'PUB' },
+            { name: 'privateKey', value: 'PRIV' },
+          ],
+        },
+      ],
+    };
+    const stripped = stripSecrets(config);
+    const vivo = paramsToRecord('params' in stripped.channels[0] ? stripped.channels[0].params : []);
+    const mi = paramsToRecord('params' in stripped.channels[1] ? stripped.channels[1].params : []);
+    expect(vivo).toEqual({ access_key: 'vivo-ak', access_secret: '' });
+    expect(mi).toEqual({ account: 'dev@example.com', publicKey: 'PUB', privateKey: '' });
+  });
+
+  it('应清空自定义渠道 headers 中的敏感值', () => {
+    const config: AppConfig = {
+      ...baseConfig(),
+      channels: [
+        {
+          name: 'my-http',
+          type: 'custom',
+          enable: true,
+          uploadType: 'http',
+          uploadUrl: 'https://upload.example.com',
+          objectKeyTemplate: '{fileName}',
+          downloadUrlTemplate: 'https://cdn.example.com/{fileName}',
+          headers: { Authorization: 'Bearer abc', 'X-Api-Key': 'k', 'X-Trace': 't' },
+          params: [],
+        },
+      ],
+    };
+    const ch = stripSecrets(config).channels[0];
+    expect(ch.type === 'custom' && ch.headers).toEqual({ Authorization: '', 'X-Api-Key': '', 'X-Trace': 't' });
+  });
+
   it('不应修改原始配置对象', () => {
     const config = baseConfig();
     stripSecrets(config);

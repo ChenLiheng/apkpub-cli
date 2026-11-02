@@ -7,6 +7,25 @@
 
 ## [未发布]
 
+### 新增
+
+- 错误码 `CHANNEL_NOT_SUBMITTABLE`：市场处于审核中时在预检阶段直接拒绝发布
+- `publish` 支持 Ctrl+C / SIGTERM 取消（再次触发强制退出），取消信号贯通到各渠道请求与 OSS 分片上传
+
+### 修复
+
+- 自定义渠道 `auth`、`headers` 中的 `${VAR}` / `keychain:` / `enc:` 占位符此前未被解析，现已生效
+- `config get` / `config export` 泄露 VIVO `access_secret` 与自定义渠道敏感 headers
+- SSRF 防护可被 IPv4 映射 IPv6 地址（如 `[::ffff:127.0.0.1]`）绕过；补充 CGNAT、组播等网段
+- OPPO / 荣耀 APK 上传沿用 60s 默认超时，大包必然失败，改为 600s
+- 华为更新说明误写入 `appDesc`（应用介绍），改为 `newFeatures`
+- 小米接口未返回应用名时误用版本号作为 `appName`
+- 华为 token 鉴权失败会被重复重试；编译轮询无法取消且提示文案有误
+- 渠道返回非 JSON 响应时抛出含义不明的内部错误
+- `--parallel` 非法值导致崩溃；非 TTY 下的错误输出不是 JSON
+- APK versionCode 或市场线上版本号无法解析时会静默跳过版本校验
+- 自定义 HTTP 渠道 PUT 上传时把整个 APK 读入内存
+
 ## [1.0.0] - 2026-06-10
 
 ### 新增

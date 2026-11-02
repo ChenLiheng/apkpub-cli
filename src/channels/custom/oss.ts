@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { CustomChannelConfig } from '../../config/schema.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 import { md5Sign } from '../../signers/md5.js';
+import { resolveSecret } from '../../secrets/resolver.js';
 import { assertSafeUrl, assertSafeUrlAsync, createHttpClient } from '../../utils/http.js';
 import { renderTemplate } from '../../utils/template.js';
 import type { UploadContext, UploadResult } from '../Channel.js';
@@ -21,7 +22,8 @@ async function fetchStsToken(
   contextB: string,
 ): Promise<StsToken> {
   await assertSafeUrlAsync(stsTokenUrl, 'STS Token URL', { allowHttp: true, warnOnHttp: true });
-  const sign = md5Sign(contextB, signKey);
+  const { value: resolvedSignKey } = await resolveSecret(signKey, { account: 'signKey' });
+  const sign = md5Sign(contextB, resolvedSignKey);
   const client = createHttpClient();
   const response = await client.post(
     stsTokenUrl,
@@ -122,11 +124,23 @@ export async function uploadToOss(ctx: UploadContext, config: CustomChannelConfi
   const client = await createOssClient(config);
   ctx.onProgress({ step: 'uploading', percent: 0 });
 
-  await client.multipartUpload(objectKey, ctx.filePath, {
-    progress: (p: number) => {
-      ctx.onProgress({ step: 'uploading', percent: Math.round(p * 100) });
-    },
-  } as Parameters<typeof client.multipartUpload>[2]);
+  // 取消信号触发时中止分片上传
+  const onAbort = (): void => client.cancel();
+  ctx.signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    await client.multipartUpload(objectKey, ctx.filePath, {
+      progress: (p: number) => {
+        ctx.onProgress({ step: 'uploading', percent: Math.round(p * 100) });
+      },
+    } as Parameters<typeof client.multipartUpload>[2]);
+  } catch (err) {
+    if (ctx.signal.aborted) {
+      throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false, cause: err });
+    }
+    throw err;
+  } finally {
+    ctx.signal.removeEventListener('abort', onAbort);
+  }
 
   const downloadUrl = renderTemplate(config.downloadUrlTemplate, {
     appId: ctx.apkInfo.applicationId,

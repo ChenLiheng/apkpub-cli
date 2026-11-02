@@ -23,6 +23,42 @@ function getErrorExitCode(err: ApkpubError): ExitCode {
   }
 }
 
+/** 解析 --parallel：未传值时按渠道数全并行，非正整数视为参数错误 */
+export function parseParallel(raw: string | boolean | undefined, channelCount: number): number {
+  if (raw === undefined) return 1;
+  if (raw === true) return Math.max(1, channelCount);
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ApkpubError({
+      code: ErrorCode.INVALID_ARGUMENT,
+      message: `--parallel 必须为正整数，当前为「${String(raw)}」`,
+      retryable: false,
+    });
+  }
+  return value;
+}
+
+/** 监听 SIGINT/SIGTERM：首次触发取消发布，再次触发强制退出 */
+function createInterruptController(): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const onSignal = (): void => {
+    if (controller.signal.aborted) {
+      process.exit(130);
+    }
+    process.stderr.write('\n收到中断信号，正在取消发布（再次按 Ctrl+C 强制退出）...\n');
+    controller.abort();
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    },
+  };
+}
+
 export function registerPublishCommand(program: Command): void {
   program
     .command('publish')
@@ -42,7 +78,7 @@ export function registerPublishCommand(program: Command): void {
       apk: string;
       channels?: string[];
       desc?: string;
-      parallel?: string;
+      parallel?: string | boolean;
       dryRun?: boolean;
       yes?: boolean;
       json?: boolean;
@@ -73,6 +109,8 @@ export function registerPublishCommand(program: Command): void {
           });
         }
 
+        const parallel = parseParallel(options.parallel, channels.length);
+        const interrupt = createInterruptController();
         const dispatcher = new Dispatcher();
         const result = await dispatcher.dispatch({
           appConfig,
@@ -80,14 +118,15 @@ export function registerPublishCommand(program: Command): void {
           apkPath: options.apk,
           updateDesc: updateDesc.trim(),
           dryRun: options.dryRun,
-          parallel: parseInt(options.parallel ?? '1', 10),
+          parallel,
+          signal: interrupt.signal,
           onChannelProgress: (channel, step, percent) => {
             if (!jsonMode && options.progress !== false) {
               const pct = percent !== undefined ? ` ${percent}%` : '';
               process.stderr.write(`[${channel}] ${step}${pct}\n`);
             }
           },
-        });
+        }).finally(() => interrupt.dispose());
 
         if (jsonMode) {
           printJson(result);
@@ -97,7 +136,7 @@ export function registerPublishCommand(program: Command): void {
         process.exit(getExitCode(result));
       } catch (err) {
         const apkErr = err instanceof ApkpubError ? err : new ApkpubError({ code: ErrorCode.INTERNAL, message: String(err) });
-        if (options.json) {
+        if (jsonMode) {
           printJson({ ok: false, error: { code: apkErr.code, message: apkErr.message, retryable: apkErr.retryable } });
         } else {
           process.stderr.write(`错误: ${apkErr.message}\n`);

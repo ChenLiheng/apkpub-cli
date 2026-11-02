@@ -2,11 +2,13 @@ import { z } from 'zod';
 import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, UploadContext } from '../Channel.js';
-import { createHttpClient } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, withRetry } from '../../utils/http.js';
 import { signSortedParams } from '../../signers/hmac.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 
 const DOMAIN = 'https://oop-openapi-cn.heytapmobi.com';
+/** APK 文件上传超时（大包上传耗时较长） */
+const UPLOAD_TIMEOUT_MS = 600_000;
 
 const credSchema = z.object({
   client_id: z.string().min(1),
@@ -55,8 +57,7 @@ export const oppoChannel: Channel = {
     const client = createHttpClient();
     const url = buildSignedUrl(`${DOMAIN}/resource/v1/app/info`, { pkg_name: appId }, token, creds.client_secret, true);
     const resp = await client.get(url);
-    checkOppoResult(resp.data, '获取App信息');
-    const data = appInfoSchema.parse(resp.data?.data ?? {});
+    const data = appInfoSchema.parse(checkOppoResult(resp.data, '获取App信息', resp.status).data ?? {});
     return {
       // OPPO audit_status 为 111 表示已上架，其余视为审核中
       reviewState: data.audit_status === 111 ? 'online' : 'reviewing',
@@ -71,26 +72,32 @@ export const oppoChannel: Channel = {
   },
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
+    const { signal } = ctx;
+    const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
     ctx.onProgress({ step: 'getToken' });
-    const token = await getToken(creds);
-    const client = createHttpClient();
+    const token = await retry(() => getToken(creds, signal));
+    const client = createHttpClient({ signal });
     ctx.onProgress({ step: 'getAppInfo' });
-    const appInfoUrl = buildSignedUrl(
-      `${DOMAIN}/resource/v1/app/info`,
-      { pkg_name: ctx.apkInfo.applicationId },
-      token,
-      creds.client_secret,
-      true,
-    );
-    const appInfoResp = await client.get(appInfoUrl);
-    checkOppoResult(appInfoResp.data, '获取App信息');
-    const appInfo = appInfoResp.data.data;
+    const appInfo = await retry(async () => {
+      // 签名含时间戳，每次重试重新生成
+      const appInfoUrl = buildSignedUrl(
+        `${DOMAIN}/resource/v1/app/info`,
+        { pkg_name: ctx.apkInfo.applicationId },
+        token,
+        creds.client_secret,
+        true,
+      );
+      const resp = await client.get(appInfoUrl);
+      return checkOppoResult(resp.data, '获取App信息', resp.status).data ?? {};
+    });
     ctx.onProgress({ step: 'getUploadUrl' });
-    const uploadUrlResp = await client.get(
-      buildSignedUrl(`${DOMAIN}/resource/v1/upload/get-upload-url`, {}, token, creds.client_secret, true),
-    );
-    checkOppoResult(uploadUrlResp.data, '获取上传url');
-    const { upload_url: rawUploadUrl, sign } = uploadUrlResp.data.data;
+    const uploadUrlData = await retry(async () => {
+      const resp = await client.get(
+        buildSignedUrl(`${DOMAIN}/resource/v1/upload/get-upload-url`, {}, token, creds.client_secret, true),
+      );
+      return checkOppoResult(resp.data, '获取上传url', resp.status).data ?? {};
+    });
+    const { upload_url: rawUploadUrl, sign } = uploadUrlData;
     ctx.onProgress({ step: 'uploading', percent: 0 });
     const signedUploadUrl = buildSignedUrl(
       rawUploadUrl,
@@ -103,15 +110,15 @@ export const oppoChannel: Channel = {
     form.append('file', createReadStream(ctx.filePath), { filename: 'app.apk' });
     form.append('type', 'apk');
     form.append('sign', sign);
-    const uploadResp = await client.post(signedUploadUrl, form, {
+    const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS, signal });
+    const uploadResp = await uploadClient.post(signedUploadUrl, form, {
       headers: form.getHeaders(),
       maxBodyLength: Infinity,
       onUploadProgress: (e) => {
         if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
       },
     });
-    checkOppoResult(uploadResp.data, '上传Apk');
-    const apkResult = uploadResp.data.data;
+    const apkResult = checkOppoResult(uploadResp.data, '上传Apk', uploadResp.status).data ?? {};
     ctx.onProgress({ step: 'submit' });
     const apkUrl = JSON.stringify([{ url: apkResult.url, md5: apkResult.md5, cpu_code: 0 }]);
     const submitParams: Record<string, string> = {
@@ -138,28 +145,44 @@ export const oppoChannel: Channel = {
     const submitResp = await client.post(submitUrl, submitForm.toString(), {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
     });
-    checkOppoResult(submitResp.data, '提交版本');
+    checkOppoResult(submitResp.data, '提交版本', submitResp.status);
     ctx.onProgress({ step: 'done', percent: 100 });
     return { message: '提交成功' };
   },
 };
 
-async function getToken(creds: { client_id: string; client_secret: string }): Promise<string> {
-  const client = createHttpClient();
+async function getToken(
+  creds: { client_id: string; client_secret: string },
+  signal?: AbortSignal,
+): Promise<string> {
+  const client = createHttpClient({ signal });
   const resp = await client.get(`${DOMAIN}/developer/v1/token`, {
     params: { client_id: creds.client_id, client_secret: creds.client_secret },
   });
-  checkOppoResult(resp.data, '获取token');
-  return resp.data.data.access_token as string;
+  const token = checkOppoResult(resp.data, '获取token', resp.status).data?.access_token;
+  if (typeof token !== 'string' || token === '') {
+    throw new ApkpubError({
+      code: ErrorCode.CHANNEL_AUTH_FAILED,
+      channel: 'oppo',
+      step: '获取token',
+      message: '获取token失败: 响应中缺少 access_token',
+      retryable: false,
+    });
+  }
+  return token;
 }
 
-function checkOppoResult(data: { errno?: number; data?: { message?: string } }, action: string): void {
+/** 校验 OPPO 业务返回码，返回已校验的响应对象 */
+function checkOppoResult(raw: unknown, action: string, status?: number): Record<string, any> {
+  const data = ensureJsonObject(raw, { channel: 'oppo', step: action, status });
   if (data.errno !== 0) {
     throw new ApkpubError({
       code: ErrorCode.CHANNEL_UPLOAD_FAILED,
       channel: 'oppo',
+      step: action,
       message: `${action}失败: ${data.data?.message ?? '未知错误'}`,
       retryable: false,
     });
   }
+  return data;
 }
