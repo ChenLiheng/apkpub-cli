@@ -160,7 +160,9 @@ export const honorChannel: Channel = {
       return checkHonorResult(resp.data, 'getUploadUrl', resp.status);
     });
     const uploadInfo = uploadUrlData.data?.[0];
-    if (!uploadInfo?.url) {
+    // 荣耀接口返回字段为 uploadUrl，兼容旧字段 url
+    const uploadUrl: string | undefined = uploadInfo?.uploadUrl ?? uploadInfo?.url;
+    if (!uploadUrl) {
       throw new ApkpubError({
         code: ErrorCode.CHANNEL_UPLOAD_FAILED,
         channel: 'honor',
@@ -173,7 +175,7 @@ export const honorChannel: Channel = {
     const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS, signal });
     const form = new FormData();
     form.append('file', createReadStream(ctx.filePath), { filename: fileName });
-    const uploadResp = await uploadClient.post(uploadInfo.url, form, {
+    const uploadResp = await uploadClient.post(uploadUrl, form, {
       headers: { Authorization: auth, ...form.getHeaders() },
       maxBodyLength: Infinity,
       onUploadProgress: (e) => {
