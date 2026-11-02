@@ -8,6 +8,19 @@ export interface ApkInfo {
   versionCode: number;
   versionName: string;
   size: number;
+  /** 应用名（取自 manifest application label，无法解析时为 undefined） */
+  appName?: string;
+}
+
+/** 从解析结果中提取应用名：label 可能是字符串、多语言数组或未解析的资源引用 */
+function extractAppName(label: unknown): string | undefined {
+  const candidates = Array.isArray(label) ? label : [label];
+  for (const item of candidates) {
+    if (typeof item === 'string' && item.trim() !== '' && !item.startsWith('resourceId:')) {
+      return item.trim();
+    }
+  }
+  return undefined;
 }
 
 /** 解析 APK 元数据 */
@@ -32,6 +45,7 @@ export async function parseApk(filePath: string): Promise<ApkInfo> {
       versionCode,
       versionName,
       size,
+      appName: extractAppName((result.application as { label?: unknown } | undefined)?.label),
     };
   } catch (err) {
     if (err instanceof ApkpubError) throw err;

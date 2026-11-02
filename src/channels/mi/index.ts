@@ -76,13 +76,22 @@ export const miChannel: Channel = {
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
     ctx.onProgress({ step: 'getAppInfo' });
-    const marketState = await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
-    const cachedAppName = (queryCache.get(ctx.apkInfo.applicationId)?.appName || marketState?.lastVersionName) ?? ctx.apkInfo.versionName;
+    await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
+    const appName = queryCache.get(ctx.apkInfo.applicationId)?.appName || ctx.apkInfo.appName;
+    if (!appName) {
+      throw new ApkpubError({
+        code: ErrorCode.CHANNEL_STATE_FAILED,
+        channel: 'mi',
+        step: 'getAppInfo',
+        message: '无法获取应用名：小米接口未返回 appName，且 APK 中未解析到应用名',
+        retryable: false,
+      });
+    }
     const requestData = JSON.stringify({
       userName: creds.account,
       synchroType: 1,
       appInfo: {
-        appName: cachedAppName,
+        appName,
         packageName: ctx.apkInfo.applicationId,
         updateDesc: ctx.desc,
       },
