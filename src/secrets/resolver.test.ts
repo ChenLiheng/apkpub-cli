@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolveSecret, resolveConfigSecrets, encryptValue } from './resolver.js';
+import { resolveSecret, resolveConfigSecrets, resolveCustomChannelSecrets, encryptValue } from './resolver.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 
 describe('resolveSecret', () => {
@@ -70,5 +70,53 @@ describe('resolveConfigSecrets', () => {
       client_id: 'public',
       empty: '',
     });
+  });
+});
+
+describe('resolveCustomChannelSecrets', () => {
+  afterEach(() => {
+    delete process.env.APKPUB_TEST_OSS_SECRET;
+    delete process.env.APKPUB_TEST_SIGN_KEY;
+    delete process.env.APKPUB_TEST_HEADER_TOKEN;
+  });
+
+  const base = {
+    name: 'my-oss',
+    type: 'custom' as const,
+    enable: true,
+    uploadType: 'oss' as const,
+    objectKeyTemplate: '{fileName}',
+    downloadUrlTemplate: 'https://cdn.example.com/{fileName}',
+    params: [],
+  };
+
+  it('应解析 AK 模式下 auth 中的环境变量占位符', async () => {
+    process.env.APKPUB_TEST_OSS_SECRET = 'real-oss-secret';
+    const resolved = await resolveCustomChannelSecrets({
+      ...base,
+      auth: { mode: 'ak', accessKeyId: 'ak-id', accessKeySecret: '${APKPUB_TEST_OSS_SECRET}' },
+    });
+    expect(resolved.auth).toEqual({ mode: 'ak', accessKeyId: 'ak-id', accessKeySecret: 'real-oss-secret' });
+  });
+
+  it('应解析 STS 模式的 signKey 与 headers 中的占位符', async () => {
+    process.env.APKPUB_TEST_SIGN_KEY = 'real-sign-key';
+    process.env.APKPUB_TEST_HEADER_TOKEN = 'Bearer abc';
+    const resolved = await resolveCustomChannelSecrets({
+      ...base,
+      auth: { mode: 'sts', stsTokenUrl: 'https://sts.example.com', signKey: '${APKPUB_TEST_SIGN_KEY}', contextB: '{}' },
+      headers: { Authorization: '${APKPUB_TEST_HEADER_TOKEN}', 'X-Plain': 'v' },
+    });
+    expect(resolved.auth).toMatchObject({ mode: 'sts', signKey: 'real-sign-key' });
+    expect(resolved.headers).toEqual({ Authorization: 'Bearer abc', 'X-Plain': 'v' });
+  });
+
+  it('环境变量缺失时抛 SECRET_RESOLVE_FAILED', async () => {
+    await expect(
+      resolveCustomChannelSecrets({
+        ...base,
+        auth: { mode: 'ak', accessKeyId: 'id', accessKeySecret: '${APKPUB_TEST_OSS_SECRET}' },
+      }),
+    ).rejects.toMatchObject({ code: ErrorCode.SECRET_RESOLVE_FAILED });
   });
 });

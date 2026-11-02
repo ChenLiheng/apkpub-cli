@@ -32,10 +32,13 @@ export class TaskLauncher {
     this.enableChannel = options.enableChannel;
   }
 
-  /** 注入渠道配置参数 */
-  injectConfig(resolvedParams: Record<string, string>): void {
+  /**
+   * 注入渠道配置参数
+   * @param resolvedChannelConfig 已解析密钥的渠道配置（自定义渠道 auth/headers），缺省使用原始配置
+   */
+  injectConfig(resolvedParams: Record<string, string>, resolvedChannelConfig?: ChannelConfig): void {
     if (this.channelConfig.type === 'custom') {
-      this.config = { ...this.channelConfig, ...resolvedParams };
+      this.config = { ...(resolvedChannelConfig ?? this.channelConfig), ...resolvedParams };
     } else {
       this.config = { ...resolvedParams };
       const fileId = resolvedParams.fileNameIdentify ?? this.channel.fileNameIdentify;
