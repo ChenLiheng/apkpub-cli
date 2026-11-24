@@ -14,6 +14,7 @@
 
 ### 修复
 
+- 荣耀 `objectId` 为 64 位整数，JSON 解析丢失精度导致绑定 APK 报 `objectId is not exists`
 - 自定义渠道 `auth`、`headers` 中的 `${VAR}` / `keychain:` / `enc:` 占位符此前未被解析，现已生效
 - `config get` / `config export` 泄露 VIVO `access_secret` 与自定义渠道敏感 headers
 - SSRF 防护可被 IPv4 映射 IPv6 地址（如 `[::ffff:127.0.0.1]`）绕过；补充 CGNAT、组播等网段
