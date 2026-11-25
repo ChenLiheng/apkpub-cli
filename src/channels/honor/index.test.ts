@@ -4,12 +4,14 @@ import { writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { honorChannel } from './index.js';
+import { honorChannel, parseUploadUrlResponse, buildBindFileBody } from './index.js';
 import type { UploadContext } from '../Channel.js';
 import { ApkpubError } from '../../errors/ApkpubError.js';
 
 const API = 'https://appmarket-openapi-drcn.cloud.honor.com';
 const IAM = 'https://iam.developer.honor.com';
+// 荣耀真实返回的 objectId 规模（19 位，超出 Number.MAX_SAFE_INTEGER）
+const OBJECT_ID = '2125232167721242625';
 const config = { client_id: 'cid', client_secret: 'csecret' };
 
 let apkPath: string;
@@ -115,17 +117,18 @@ describe('honorChannel.upload', () => {
     nock(API)
       .post('/openapi/v1/publish/get-file-upload-url')
       .query(true)
-      .reply(200, { code: 0, data: [{ uploadUrl: `${API}/upload/obs`, objectId: 'obj-1' }] });
+      // 用原始文本回包，模拟荣耀以 JSON 数字返回 64 位 objectId
+      .reply(200, `{"code":0,"data":[{"uploadUrl":"${API}/upload/obs","objectId":${OBJECT_ID}}]}`, {
+        'content-type': 'application/json',
+      });
     nock(API)
       .post('/upload/obs')
       .matchHeader('content-length', (v: string) => Number(v) > 0)
       .reply(200, { code: 0 });
     nock(API)
-      .post('/openapi/v1/publish/update-file-info', (body: { bindingFileList?: Array<Record<string, unknown>> }) => {
-        // 绑定 APK 的字段名必须是 bindingFileList（对照 laiBao HonorBindApkFile.kt），
-        // 否则荣耀返回 code 0 但未绑定，submit 报 30036 APK file not bound
-        return body?.bindingFileList?.[0]?.objectId === 'obj-1';
-      })
+      // 按原始请求体匹配：字段名必须是 bindingFileList（否则 submit 报 30036），
+      // 且 objectId 须作为 JSON 数字一位不差地发回（否则报 objectId is not exists）
+      .post('/openapi/v1/publish/update-file-info', new RegExp(`^\\{"bindingFileList":\\[\\{"objectId":${OBJECT_ID}\\}\\]\\}$`))
       .query(true)
       .reply(200, { code: 0 });
     nock(API)
@@ -170,5 +173,24 @@ describe('honorChannel.upload', () => {
     nock(API).post('/upload/obs').reply(200, { code: 1, message: '上传失败' });
 
     await expect(honorChannel.upload(makeCtx(pkg))).rejects.toBeInstanceOf(ApkpubError);
+  });
+});
+
+describe('honor objectId 精度', () => {
+  it('parseUploadUrlResponse 保留超出安全整数的 objectId', () => {
+    const raw = `{"code":0,"data":[{"uploadUrl":"https://x/obs","objectId":${OBJECT_ID},"size":16}]}`;
+    expect(Number.isSafeInteger(Number(OBJECT_ID))).toBe(false);
+    const parsed = parseUploadUrlResponse(raw) as { data: Array<{ objectId: string; size: number }> };
+    expect(parsed.data[0].objectId).toBe(OBJECT_ID);
+    expect(parsed.data[0].size).toBe(16);
+  });
+
+  it('parseUploadUrlResponse 非 JSON 文本原样返回', () => {
+    expect(parseUploadUrlResponse('<html>bad gateway</html>')).toBe('<html>bad gateway</html>');
+  });
+
+  it('buildBindFileBody 数字 ID 原样输出为 JSON 数字，非数字按字符串', () => {
+    expect(buildBindFileBody(OBJECT_ID)).toBe(`{"bindingFileList":[{"objectId":${OBJECT_ID}}]}`);
+    expect(JSON.parse(buildBindFileBody('obj-1'))).toEqual({ bindingFileList: [{ objectId: 'obj-1' }] });
   });
 });

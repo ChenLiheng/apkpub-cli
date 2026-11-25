@@ -66,6 +66,32 @@ async function getAppId(token: string, packageName: string, signal?: AbortSignal
   return list[0].appId;
 }
 
+/**
+ * 解析 get-file-upload-url 响应：荣耀返回的 objectId 是 64 位整数（laiBao 用 Long 接收），
+ * 超出 JS 安全整数范围，直接 JSON.parse 会丢失末位精度。解析前先把 objectId 的数字字面量改成字符串。
+ */
+export function parseUploadUrlResponse(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw;
+  const text = raw.replace(/("objectId"\s*:\s*)(-?\d+)(?=\s*[,}\]])/g, '$1"$2"');
+  try {
+    return JSON.parse(text);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * 构造绑定 APK 请求体：objectId 为纯数字时按 JSON 数字原样输出（与 laiBao 的 Long 序列化一致），
+ * 避免经 number 转换丢失精度；非纯数字时按字符串序列化。
+ */
+export function buildBindFileBody(objectId: unknown): string {
+  const id = String(objectId ?? '');
+  const literal = /^-?\d+$/.test(id) ? id : JSON.stringify(id);
+  // 绑定字段名必须是 bindingFileList（对照 laiBao HonorBindApkFile.kt）；
+  // 用 fileInfoList 时荣耀返回 code 0 但不绑定，后续 submit 报 30036 APK file not bound
+  return `{"bindingFileList":[{"objectId":${literal}}]}`;
+}
+
 /** 校验荣耀业务返回码，返回已校验的响应对象 */
 function checkHonorResult(raw: unknown, action: string, status?: number): Record<string, any> {
   const data = ensureJsonObject(raw, { channel: 'honor', step: action, status });
@@ -155,7 +181,13 @@ export const honorChannel: Channel = {
       const resp = await client.post(
         `${BASE_URL}/openapi/v1/publish/get-file-upload-url`,
         [{ fileName, fileType: 100, fileSize: ctx.apkInfo.size, fileSha256: sha256 }],
-        { headers: { Authorization: auth }, params: { appId } },
+        {
+          headers: { Authorization: auth },
+          params: { appId },
+          // 按原始文本接收并自行解析，保留 objectId 的 64 位精度
+          responseType: 'text',
+          transformResponse: [parseUploadUrlResponse],
+        },
       );
       return checkHonorResult(resp.data, 'getUploadUrl', resp.status);
     });
@@ -194,10 +226,8 @@ export const honorChannel: Channel = {
     ctx.onProgress({ step: 'bindApk' });
     const bindResp = await client.post(
       `${BASE_URL}/openapi/v1/publish/update-file-info`,
-      // 绑定字段名必须是 bindingFileList（对照 laiBao HonorBindApkFile.kt）；
-      // 用 fileInfoList 时荣耀返回 code 0 但不绑定，后续 submit 报 30036 APK file not bound
-      { bindingFileList: [{ objectId: uploadInfo.objectId }] },
-      { headers: { Authorization: auth }, params: { appId } },
+      buildBindFileBody(uploadInfo.objectId),
+      { headers: { Authorization: auth, 'content-type': 'application/json' }, params: { appId } },
     );
     checkHonorResult(bindResp.data, 'bindApk', bindResp.status);
     ctx.onProgress({ step: 'updateDesc' });
