@@ -49,6 +49,15 @@ jobs:
             exit 1
           fi
 
+      # 发布前必须在 CHANGELOG 中为当前版本写好「## [x.y.z] - YYYY-MM-DD」小节
+      - name: Verify CHANGELOG has an entry for this version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if ! grep -qE "^## \[${PKG_VERSION//./\\.}\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 缺少版本 ${PKG_VERSION} 的小节（格式：## [${PKG_VERSION}] - YYYY-MM-DD），请先把「未发布」的内容整理到该版本下"
+            exit 1
+          fi
+
       - name: Type check
         run: pnpm typecheck
 

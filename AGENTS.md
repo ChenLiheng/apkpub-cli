@@ -173,7 +173,19 @@ interface Channel {
 - 渠道上传逻辑（`getMarketState`/`upload`）建议补充 mock 测试，覆盖鉴权失败、版本过低、上传非 2xx 等分支。
 - 提交前跑 `pnpm typecheck && pnpm test`。
 
-## 13. 分支命名规范
+## 13. 发布流程
+
+**每次发布都必须更新 `CHANGELOG.md`**，发布工作流会校验，缺少当前版本的小节时直接失败。
+
+1. 开发期间，把用户可感知的改动写进 `## [未发布]`，按「新增 / 变更 / 修复」分类；不兼容变更写在「变更」里并加粗说明。
+2. 发布前：
+   - 把「未发布」下的内容移到 `## [x.y.z] - YYYY-MM-DD`，「未发布」保留为空标题；
+   - 更新文件末尾的比较链接；
+   - 用 `pnpm version x.y.z --no-git-tag-version` 修改 `package.json` 版本号。
+3. 版本号遵循语义化版本：0.x 阶段有不兼容变更时升次版本号（0.1.0 → 0.2.0），其余升补丁号。
+4. 在 `main` 上提交 `release: vx.y.z`，打 tag `vx.y.z` 并推送，`.github/workflows/publish.yml` 会校验 tag 与 `package.json` 版本一致、CHANGELOG 有对应小节，通过后发布 npm 并创建 GitHub Release。
+
+## 14. 分支命名规范
 
 新建分支一律从最新 `main` 切出，并使用 `<类型>/<简短描述>` 形式（小写、短横线分隔）：
 

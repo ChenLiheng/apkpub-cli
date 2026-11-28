@@ -7,10 +7,11 @@
 
 ## [未发布]
 
+## [0.1.0] - 2026-11-28
+
 ### 新增
 
-- 错误码 `CHANNEL_NOT_SUBMITTABLE`：市场处于审核中时在预检阶段直接拒绝发布
-- `publish` 支持 Ctrl+C / SIGTERM 取消（再次触发强制退出），取消信号贯通到各渠道请求与 OSS 分片上传
+- 根命令 `--help` 顶部展示 Banner（字标、版本号与支持的渠道）
 - `publish` 在终端交互模式下发布前展示摘要并请求确认，`--yes` 跳过（JSON / dry-run / 无 TTY 不提示）
 - `publish --debug` 输出调试日志（选中文件、APK 信息、线上状态）
 - 各市场查询线上状态时遇到网络错误自动重试，并响应取消信号
@@ -39,6 +40,21 @@
 
 ### 修复
 
+- 上传已成功但审计日志写入失败时，渠道被误报为失败
+- `--json` 输出后立即退出进程，在 macOS 管道下可能截断 JSON
+- 华为查询应用信息时未校验 HTTP 状态与业务码，接口报错时线上版本号被当作 0，任何 APK 都能通过版本校验
+- 华为、荣耀的 token 被市场拒绝后仍缓存 10 分钟，重试期间反复使用同一个失效 token
+- 共享的 token 请求绑定第一个调用方的取消信号，其取消会让其他等待者一起失败
+
+## [0.0.7] - 2026-11-24
+
+### 新增
+
+- 错误码 `CHANNEL_NOT_SUBMITTABLE`：市场处于审核中时在预检阶段直接拒绝发布
+- `publish` 支持 Ctrl+C / SIGTERM 取消（再次触发强制退出），取消信号贯通到各渠道请求与 OSS 分片上传
+
+### 修复
+
 - 荣耀 `objectId` 为 64 位整数，JSON 解析丢失精度导致绑定 APK 报 `objectId is not exists`
 - 自定义渠道 `auth`、`headers` 中的 `${VAR}` / `keychain:` / `enc:` 占位符此前未被解析，现已生效
 - `config get` / `config export` 泄露 VIVO `access_secret` 与自定义渠道敏感 headers
@@ -51,13 +67,8 @@
 - `--parallel` 非法值导致崩溃；非 TTY 下的错误输出不是 JSON
 - APK versionCode 或市场线上版本号无法解析时会静默跳过版本校验
 - 自定义 HTTP 渠道 PUT 上传时把整个 APK 读入内存
-- 上传已成功但审计日志写入失败时，渠道被误报为失败
-- `--json` 输出后立即退出进程，在 macOS 管道下可能截断 JSON
-- 华为查询应用信息时未校验 HTTP 状态与业务码，接口报错时线上版本号被当作 0，任何 APK 都能通过版本校验
-- 华为、荣耀的 token 被市场拒绝后仍缓存 10 分钟，重试期间反复使用同一个失效 token
-- 共享的 token 请求绑定第一个调用方的取消信号，其取消会让其他等待者一起失败
 
-## [1.0.0] - 2026-06-10
+## [0.0.1] - 2026-06-10
 
 ### 新增
 
@@ -73,5 +84,7 @@
 - MCP server 模式，向 Agent 暴露 `publish/status/info/doctor` 工具
 - 安全：输出脱敏、SSRF 防护、模板路径穿越防护、配置文件权限校验
 
-[未发布]: https://github.com/your-org/apkpub-cli/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/your-org/apkpub-cli/releases/tag/v1.0.0
+[未发布]: https://github.com/ChenLiheng/apkpub-cli/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ChenLiheng/apkpub-cli/releases/tag/v0.1.0
+[0.0.7]: https://www.npmjs.com/package/apkpub-cli/v/0.0.7
+[0.0.1]: https://github.com/ChenLiheng/apkpub-cli/releases/tag/v0.0.1
