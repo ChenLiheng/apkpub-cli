@@ -3,34 +3,10 @@
 [![npm version](https://img.shields.io/npm/v/apkpub-cli.svg)](https://www.npmjs.com/package/apkpub-cli)
 [![npm downloads](https://img.shields.io/npm/dm/apkpub-cli.svg)](https://www.npmjs.com/package/apkpub-cli)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 APK 多市场分发 CLI 工具。支持将已签名的 APK 一键发布到华为、小米、OPPO、VIVO、荣耀应用市场，以及可配置的自定义上传渠道（阿里云 OSS / 通用 HTTP）。面向 CI/CD、本地命令行与 AI Agent（内置 MCP server）。
-
-## 目录
-
-- [apkpub-cli](#apkpub-cli)
-  - [目录](#目录)
-  - [安装](#安装)
-  - [快速开始](#快速开始)
-    - [1. 创建应用配置](#1-创建应用配置)
-    - [2. 解析 APK](#2-解析-apk)
-    - [3. 查询市场状态](#3-查询市场状态)
-    - [4. 发布 APK](#4-发布-apk)
-    - [5. 配置体检](#5-配置体检)
-  - [配置管理](#配置管理)
-  - [密钥管理](#密钥管理)
-  - [自定义渠道（通用上传）](#自定义渠道通用上传)
-  - [内置市场渠道](#内置市场渠道)
-  - [Agent / MCP 集成](#agent--mcp-集成)
-    - [Cursor MCP 配置示例](#cursor-mcp-配置示例)
-  - [CI 集成示例](#ci-集成示例)
-  - [退出码](#退出码)
-  - [开发](#开发)
-  - [安全说明](#安全说明)
-  - [贡献](#贡献)
-  - [许可证](#许可证)
 
 ## 安装
 
@@ -80,8 +56,10 @@ apkpub publish --app com.example.app --apk ./apks/ \
   --channels huawei,mi,oppo,vivo,honor --desc "版本更新"
 
 # 预检模式（不实际上传）
-apkpub publish --app com.example.app --apk ./app.apk --dry-run --json
+apkpub publish --app com.example.app --apk ./app.apk --desc "修复已知问题" --dry-run --json
 ```
+
+在终端交互运行时，`publish` 会先展示发布摘要并请求确认；传 `--yes`、`--json`、`--dry-run` 或在无 TTY 的 CI 环境中不会提示。`--debug` 输出选中的文件、APK 信息与线上状态等调试日志（stderr）。
 
 ### 5. 配置体检
 
@@ -178,23 +156,29 @@ apkpub describe --json
 apkpub mcp
 ```
 
-MCP 暴露工具：`apkpub_info`、`apkpub_status`、`apkpub_publish`、`apkpub_doctor`
+MCP 暴露工具：`apkpub_describe`、`apkpub_info`、`apkpub_status`、`apkpub_publish`、`apkpub_doctor`
 
 #### Agent Skill 自动同步
 
-安装本包时（`postinstall`）会自动把内置 skill `using-apkpub-cli`（指导 Agent 如何调用 apkpub）同步到已检测到的 Agent skills 目录：`~/.agents/skills/`、`~/.cursor/skills/`、`~/.hermes/skills/`、`~/.claude/skills/`（仅当对应配置目录存在时安装）。
+随包附带 skill `using-apkpub-cli`（指导 Agent 如何调用 apkpub），会自动同步到已检测到的 Agent skills 目录：`~/.agents/skills/`、`~/.cursor/skills/`、`~/.hermes/skills/`、`~/.claude/skills/`（仅当对应配置目录存在时安装）。
+
+- **安装 / 升级时**：npm 通过 `postinstall` 自动同步。
+- **首次运行时**：pnpm 10、bun 默认不执行依赖的安装脚本，或者 Agent 是在 apkpub 之后安装的，此时运行任意 `apkpub` 命令会自动补齐（只在 skill 版本与 CLI 不一致时写入，提示输出到 stderr，不影响 `--json`）。CI 环境（`CI=true`）不自动同步。
+- **卸载后不会被装回**：`skill uninstall` 会在 `~/.apkpub/skill-state.json` 记录关闭自动同步，之后运行其他命令或升级都不会重新安装；再次执行 `apkpub skill install` 即可恢复。
+- **不会覆盖你的修改**：skill 目录里的 `.apkpub-skill.json` 记录了安装的版本和文件哈希。你改过的文件不会被覆盖（会给出提示），你自己添加的文件不会被删除；新版本移除的文件只在未被修改时清理。符号链接不会被覆盖或删除，清单中指向 skill 目录之外的路径会被忽略。
 
 ```bash
-# 手动重新同步
-node node_modules/apkpub-cli/scripts/install-skill.mjs
-# 或在本仓库内
-pnpm install-skill
+apkpub skill status              # 查看各 Agent 的安装状态与版本
+apkpub skill install             # 手动安装 / 更新
+apkpub skill install --force     # 覆盖被修改过的文件（先备份为 .bak）
+apkpub skill install --all       # 为所有支持的 Agent 安装，即使未检测到
+apkpub skill uninstall           # 卸载并关闭自动同步（保留你添加或修改过的文件）
 ```
 
 可用环境变量控制：
 
-- `APKPUB_SKIP_SKILL_INSTALL=1`：跳过同步。
-- `APKPUB_FORCE_SKILL_INSTALL=1`：为所有目标强制创建目录并安装。
+- `APKPUB_SKIP_SKILL_INSTALL=1`：跳过同步（安装时与运行时）。
+- `APKPUB_FORCE_SKILL_INSTALL=1`：安装时为所有支持的 Agent 创建目录并安装（同 `--all`）。
 - `APKPUB_SKILL_DIRS=/path/a,/path/b`：追加自定义安装根目录。
 
 ### Cursor MCP 配置示例
@@ -228,13 +212,17 @@ pnpm install-skill
 
 ## 退出码
 
-| 码  | 含义          |
-| --- | ------------- |
-| 0   | 全部成功      |
-| 2   | 参数/配置错误 |
-| 3   | 版本校验失败  |
-| 4   | 部分渠道失败  |
-| 5   | 全部失败      |
+| 码  | 含义                     |
+| --- | ------------------------ |
+| 0   | 全部成功                 |
+| 1   | 内部错误                 |
+| 2   | 参数/配置/密钥错误       |
+| 3   | 版本校验失败             |
+| 4   | 部分渠道失败             |
+| 5   | 全部失败                 |
+| 130 | 用户取消                 |
+
+`status` 同样遵循上表：部分渠道查询失败返回 4，全部失败返回 5；`doctor` 存在未通过的渠道时返回 5。`publish` 在确认提示中选择「否」或再次按 Ctrl+C 强制退出时返回 130。
 
 ## 开发
 

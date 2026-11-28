@@ -26,7 +26,7 @@ export const ossAuthSchema = z.discriminatedUnion('mode', [
   }),
   z.object({
     mode: z.literal('sts'),
-    stsTokenUrl: z.string().url(),
+    stsTokenUrl: z.url(),
     signKey: z.string(),
     contextB: z.string().default('{}'),
   }),
@@ -44,7 +44,7 @@ export const customChannelConfigSchema = z.object({
   auth: ossAuthSchema.optional(),
   uploadUrl: z.string().optional(),
   method: z.enum(['PUT', 'POST']).optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   formField: z.string().optional(),
   objectKeyTemplate: z.string(),
   downloadUrlTemplate: z.string(),
@@ -57,9 +57,9 @@ export const channelConfigSchema = z.union([marketChannelConfigSchema, customCha
 export const extensionSchema = z.object({
   updateDesc: z.string().optional(),
   apkDir: z.string().optional(),
-  urls: z.record(z.string()).optional(),
-  lastVersionCode: z.record(z.number()).optional(),
-  lastVersionName: z.record(z.string()).optional(),
+  urls: z.record(z.string(), z.string()).optional(),
+  lastVersionCode: z.record(z.string(), z.number()).optional(),
+  lastVersionName: z.record(z.string(), z.string()).optional(),
 });
 
 /** 应用配置 */

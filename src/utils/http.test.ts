@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { lookup } from 'node:dns/promises';
-import { assertSafeUrl, assertSafeUrlAsync, ensureJsonObject, sleep, withRetry } from './http.js';
+import { AxiosError } from 'axios';
+import { assertSafeUrl, assertSafeUrlAsync, ensureJsonObject, isRetryableError, sleep, withRetry } from './http.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 
 vi.mock('node:dns/promises', () => ({
@@ -212,5 +213,34 @@ describe('ensureJsonObject', () => {
       expect((err as ApkpubError).retryable).toBe(retryable);
       expect((err as ApkpubError).channel).toBe('oppo');
     }
+  });
+});
+
+describe('isRetryableError', () => {
+  it('ApkpubError 按 retryable 判断', () => {
+    expect(isRetryableError(new ApkpubError({ code: ErrorCode.NETWORK_ERROR, message: 'net' }))).toBe(true);
+    expect(
+      isRetryableError(new ApkpubError({ code: ErrorCode.INVALID_ARGUMENT, message: 'bad', retryable: false })),
+    ).toBe(false);
+  });
+
+  it('无响应的 axios 错误可重试，4xx 不重试，5xx / 429 重试', () => {
+    expect(isRetryableError(new AxiosError('timeout', 'ECONNABORTED'))).toBe(true);
+    const withStatus = (status: number) =>
+      new AxiosError('http', 'ERR_BAD_RESPONSE', undefined, undefined, { status } as never);
+    expect(isRetryableError(withStatus(400))).toBe(false);
+    expect(isRetryableError(withStatus(429))).toBe(true);
+    expect(isRetryableError(withStatus(503))).toBe(true);
+  });
+
+  it('系统网络错误码可重试，普通编程错误不重试', () => {
+    expect(isRetryableError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }))).toBe(true);
+    expect(isRetryableError(new TypeError('x is undefined'))).toBe(false);
+  });
+
+  it('withRetry 遇到普通错误不重试', async () => {
+    const fn = vi.fn().mockRejectedValue(new TypeError('bug'));
+    await expect(withRetry(fn, { retries: 3, delayMs: 0 })).rejects.toBeInstanceOf(TypeError);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

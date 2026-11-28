@@ -14,7 +14,7 @@
 
 ## 2. 技术栈与常用命令
 
-- 运行时：Node.js `>=18`，纯 **ESM**（`"type": "module"`）。
+- 运行时：Node.js `>=20`，纯 **ESM**（`"type": "module"`）。
 - 语言：TypeScript（严格类型，禁止隐式 `any`）。
 - 包管理：**pnpm**（`packageManager: pnpm@10.x`）。
 - 打包：`tsup`（入口 `src/bin/apkpub.ts` → `dist/apkpub.js`，带 `#!/usr/bin/env node` banner）。
@@ -30,7 +30,7 @@ pnpm typecheck      # tsc --noEmit
 pnpm start          # 运行 dist/apkpub.js
 ```
 
-CI（`.github/workflows/ci.yml`）在 Node 18/20/22 三个版本上执行 `typecheck → test → build`，外加 `pnpm audit`。**提交前务必保证 `pnpm typecheck` 与 `pnpm test` 通过。**
+CI（`.github/workflows/ci.yml`）在 Node 20/22/24 三个版本上执行 `typecheck → test → build`，外加 `pnpm audit --audit-level high`（存在高危漏洞时失败）。**提交前务必保证 `pnpm typecheck` 与 `pnpm test` 通过。**
 
 > 关键约束：源码用 ESM 相对导入时**必须带 `.js` 后缀**（如 `import { logger } from '../utils/logger.js'`），即便源文件是 `.ts`。这是全仓库统一约定，新增导入请遵守。
 
@@ -40,10 +40,12 @@ CI（`.github/workflows/ci.yml`）在 Node 18/20/22 三个版本上执行 `typec
 src/
 ├── bin/apkpub.ts        # CLI 入口，注册所有子命令（commander）
 ├── cli/                 # 各子命令的注册与参数解析（薄层，只做编排）
-│   ├── init / config / info / publish / status / channels / doctor / describe / mcp
+│   ├── init / config / info / publish / status / channels / doctor / describe / mcp / skill
 ├── core/                # 编排核心（与具体渠道、UI 解耦）
 │   ├── Dispatcher.ts    # 多渠道并发分发编排器
 │   ├── TaskLauncher.ts  # 单渠道任务：选文件 → 解析 APK → 注入配置
+│   ├── preflight.ts     # 发布输入校验（CLI 与 MCP 共用）
+│   ├── inspect.ts       # status / doctor 的逐渠道查询与体检（CLI 与 MCP 共用）
 │   ├── versionCheck.ts  # 包名匹配 / 版本号校验
 │   └── result.ts        # 结果聚合、退出码、ChannelResult/PublishResult 模型
 ├── channels/            # 渠道实现（核心扩展点）
@@ -56,6 +58,7 @@ src/
 ├── signers/             # 签名工具（hmac / md5 / rsa），各带 *.test.ts
 ├── apk/ApkParser.ts     # APK 元数据解析（app-info-parser 封装）
 ├── mcp/server.ts        # MCP Server（stdio）
+├── skill/installer.ts   # Agent skill 安装 / 更新 / 卸载（清单 .apkpub-skill.json 记录版本与文件哈希）
 ├── errors/ApkpubError.ts# 统一错误模型 + 错误码枚举
 └── utils/               # http(含 SSRF 防护/重试) / logger / output / redaction / template / files
 ```
@@ -154,6 +157,7 @@ interface Channel {
 - `apkpub describe --json`：输出命令、渠道、退出码、`publishResult` JSON schema 的机器可读自描述（`cli/describe.ts`）。Agent 应先调用它进行能力发现。
 - `apkpub mcp`：以 stdio 启动 MCP Server（`mcp/server.ts`），暴露 4 个工具：`apkpub_info` / `apkpub_status` / `apkpub_publish` / `apkpub_doctor`。MCP 工具复用 `core/` 与 `channels/`，与 CLI 同源。
 - 新增 CLI 能力若希望对 Agent 可见，需同步在 `describe.ts` 与 `mcp/server.ts` 注册。
+- `skills/using-apkpub-cli/` 是随包发布的 Agent skill。CLI 行为（参数、输出结构、退出码、错误码）变化时要同步更新它。它通过 postinstall（`scripts/install-skill.mjs` → `apkpub skill install`）以及 CLI 启动时的版本检查（`autoSyncSkill`）同步到用户的 Agent 目录，版本号取自 `package.json`。
 
 ## 11. 编码规范约定
 
@@ -168,3 +172,16 @@ interface Channel {
 - 单元测试集中在 `signers/*.test.ts`、`utils/template.test.ts`；HTTP 交互用 `nock` mock，避免真实网络。
 - 渠道上传逻辑（`getMarketState`/`upload`）建议补充 mock 测试，覆盖鉴权失败、版本过低、上传非 2xx 等分支。
 - 提交前跑 `pnpm typecheck && pnpm test`。
+
+## 13. 分支命名规范
+
+新建分支一律从最新 `main` 切出，并使用 `<类型>/<简短描述>` 形式（小写、短横线分隔）：
+
+| 前缀        | 用途                               | 示例                       |
+| ----------- | ---------------------------------- | -------------------------- |
+| `feat/`     | 新功能                             | `feat/samsung-channel`     |
+| `fix/`      | 缺陷修复                           | `fix/honor-objectid`       |
+| `chore/`    | 优化、维护、依赖升级、构建与配置   | `chore/optimize`           |
+| `refactor/` | 不改变行为的代码重构               | `refactor/dispatcher`      |
+| `docs/`     | 文档变更                           | `docs/readme-channels`     |
+| `test/`     | 测试补充与调整                     | `test/mi-upload-mock`      |

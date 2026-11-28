@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, UploadContext } from '../Channel.js';
-import { createHttpClient, ensureJsonObject, withRetry } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, withRetry, QUERY_TIMEOUT_MS } from '../../utils/http.js';
 import { signSortedParams } from '../../signers/hmac.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 
@@ -22,7 +22,7 @@ const appInfoSchema = z
     version_name: z.coerce.string().optional(),
     audit_status: z.coerce.number().optional(),
   })
-  .passthrough();
+  .loose();
 
 function buildSignedUrl(
   originUrl: string,
@@ -51,20 +51,24 @@ export const oppoChannel: Channel = {
   type: 'market',
   fileNameIdentify: 'OPPO',
   credentialSchema: credSchema,
-  async getMarketState(appId, config) {
+  async getMarketState(appId, config, options) {
     const creds = credSchema.parse(config);
-    const token = await getToken(creds);
-    const client = createHttpClient();
-    const url = buildSignedUrl(`${DOMAIN}/resource/v1/app/info`, { pkg_name: appId }, token, creds.client_secret, true);
-    const resp = await client.get(url);
-    const data = appInfoSchema.parse(checkOppoResult(resp.data, '获取App信息', resp.status).data ?? {});
-    return {
-      // OPPO audit_status 为 111 表示已上架，其余视为审核中
-      reviewState: data.audit_status === 111 ? 'online' : 'reviewing',
-      enableSubmit: true,
-      lastVersionCode: data.version_code ?? 0,
-      lastVersionName: data.version_name ?? '0',
-    };
+    const signal = options?.signal;
+    // 只读查询，网络抖动时整体重试
+    return withRetry(async () => {
+      const token = await getToken(creds, signal);
+      const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
+      const url = buildSignedUrl(`${DOMAIN}/resource/v1/app/info`, { pkg_name: appId }, token, creds.client_secret, true);
+      const resp = await client.get(url);
+      const data = appInfoSchema.parse(checkOppoResult(resp.data, '获取App信息', resp.status).data ?? {});
+      return {
+        // OPPO audit_status 为 111 表示已上架，其余视为审核中
+        reviewState: data.audit_status === 111 ? 'online' : 'reviewing',
+        enableSubmit: true,
+        lastVersionCode: data.version_code ?? 0,
+        lastVersionName: data.version_name ?? '0',
+      };
+    }, { signal });
   },
   async validateCredentials(config) {
     const creds = credSchema.parse(config);
@@ -155,7 +159,7 @@ async function getToken(
   creds: { client_id: string; client_secret: string },
   signal?: AbortSignal,
 ): Promise<string> {
-  const client = createHttpClient({ signal });
+  const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
   const resp = await client.get(`${DOMAIN}/developer/v1/token`, {
     params: { client_id: creds.client_id, client_secret: creds.client_secret },
   });

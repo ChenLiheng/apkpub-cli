@@ -7,12 +7,15 @@ import { paramsToRecord } from '../config/schema.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { listApkFiles } from '../utils/files.js';
 import { parseApk } from '../apk/ApkParser.js';
+import { resolveConfigSecrets, resolveCustomChannelSecrets } from '../secrets/resolver.js';
 
 export interface TaskLauncherOptions {
   channel: Channel;
   channelConfig: ChannelConfig;
   apkPath: string;
   enableChannel: boolean;
+  /** APK 解析函数，缺省为 parseApk；Dispatcher 传入带缓存的实现以避免同一文件重复解析 */
+  parseApk?: (filePath: string) => Promise<ApkInfo>;
 }
 
 /** 单渠道任务启动器 */
@@ -21,6 +24,7 @@ export class TaskLauncher {
   readonly channelConfig: ChannelConfig;
   private apkPath: string;
   private enableChannel: boolean;
+  private parse: (filePath: string) => Promise<ApkInfo>;
   private resolvedFile?: string;
   private apkInfo?: ApkInfo;
   private config: Record<string, unknown> = {};
@@ -30,6 +34,23 @@ export class TaskLauncher {
     this.channelConfig = options.channelConfig;
     this.apkPath = options.apkPath;
     this.enableChannel = options.enableChannel;
+    this.parse = options.parseApk ?? parseApk;
+  }
+
+  /** 解析渠道参数与自定义渠道 auth/headers 中的密钥占位符，并注入为运行时配置 */
+  async resolveConfig(applicationId: string): Promise<Record<string, unknown>> {
+    const secretOptions = {
+      service: 'apkpub-cli',
+      account: `${applicationId}/${this.channel.name}`,
+    };
+    const rawParams = TaskLauncher.getRawParams(this.channelConfig);
+    const resolved = await resolveConfigSecrets(rawParams, secretOptions);
+    const resolvedChannelConfig =
+      this.channelConfig.type === 'custom'
+        ? await resolveCustomChannelSecrets(this.channelConfig, secretOptions)
+        : this.channelConfig;
+    this.injectConfig(resolved, resolvedChannelConfig);
+    return this.config;
   }
 
   /**
@@ -87,7 +108,7 @@ export class TaskLauncher {
   /** 解析 APK 信息 */
   async prepare(): Promise<ApkInfo> {
     const file = this.resolvedFile ?? (await this.selectFile());
-    this.apkInfo = await parseApk(file);
+    this.apkInfo = await this.parse(file);
     return this.apkInfo;
   }
 

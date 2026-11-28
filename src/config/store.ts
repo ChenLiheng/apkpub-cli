@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile, chmod, access } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile, chmod, access, appendFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
@@ -40,8 +40,7 @@ export async function ensureConfigDirs(debug = false): Promise<void> {
 
 async function checkPermissions(dir: string): Promise<void> {
   try {
-    const { statSync } = await import('node:fs');
-    const mode = statSync(dir).mode & 0o777;
+    const mode = (await stat(dir)).mode & 0o777;
     if (mode > 0o700) {
       logger.warn('config', `配置目录权限过宽 (${mode.toString(8)})，建议 chmod 700 ${dir}`);
     }
@@ -77,8 +76,21 @@ export async function loadConfig(applicationId: string, debug = false): Promise<
     });
   }
   const content = await readFile(filePath, 'utf8');
-  const raw = JSON.parse(content) as unknown;
-  return migrateConfig(raw);
+  return parseConfigContent(content, filePath);
+}
+
+/** 解析配置文件内容：JSON 语法错误或 schema 校验失败统一转为 CONFIG_INVALID */
+function parseConfigContent(content: string, source: string): AppConfig {
+  try {
+    return migrateConfig(JSON.parse(content) as unknown);
+  } catch (err) {
+    throw new ApkpubError({
+      code: ErrorCode.CONFIG_INVALID,
+      message: `配置文件无效 (${source}): ${err instanceof Error ? err.message : String(err)}`,
+      retryable: false,
+      cause: err,
+    });
+  }
 }
 
 /** 列出所有应用配置 */
@@ -110,8 +122,7 @@ export async function listConfigs(debug = false): Promise<AppConfig[]> {
 /** 导入配置 */
 export async function importConfig(filePath: string, debug = false): Promise<AppConfig> {
   const content = await readFile(filePath, 'utf8');
-  const raw = JSON.parse(content) as unknown;
-  const config = migrateConfig(raw);
+  const config = parseConfigContent(content, filePath);
   await saveConfig(config, debug);
   return config;
 }
@@ -140,14 +151,23 @@ export function validateConfig(config: unknown): AppConfig {
   }
 }
 
+/** 已确保存在的审计日志目录（按 debug 区分），避免每写一条日志都重复 mkdir/chmod */
+const auditDirsReady = new Map<boolean, Promise<void>>();
+
 /** 写入审计日志 */
 export async function writeAuditLog(
   entry: { action: string; appId: string; channels: string[]; versionCode?: number; result: string },
   debug = false,
 ): Promise<void> {
-  await ensureConfigDirs(debug);
+  let ready = auditDirsReady.get(debug);
+  if (!ready) {
+    ready = ensureConfigDirs(debug);
+    // 失败时清除，下次重新尝试创建目录
+    ready.catch(() => auditDirsReady.delete(debug));
+    auditDirsReady.set(debug, ready);
+  }
+  await ready;
   const logFile = path.join(getLogsDir(debug), 'audit.log');
   const line = JSON.stringify({ ...entry, timestamp: new Date().toISOString() }) + '\n';
-  const { appendFile } = await import('node:fs/promises');
   await appendFile(logFile, line, { mode: 0o600 });
 }

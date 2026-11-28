@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { huaweiChannel } from './index.js';
 import type { UploadContext } from '../Channel.js';
+import { clearAllTokenCaches } from '../tokenCache.js';
 import { ApkpubError } from '../../errors/ApkpubError.js';
 
 const HOST = 'https://connect-api.cloud.huawei.com';
@@ -24,6 +25,7 @@ afterAll(() => {
 
 afterEach(() => {
   nock.cleanAll();
+  clearAllTokenCaches();
   vi.useRealTimers();
 });
 
@@ -71,6 +73,36 @@ describe('huaweiChannel.getMarketState', () => {
     expect(state?.reviewState).toBe(expected);
     expect(state?.enableSubmit).toBe(expected !== 'reviewing');
     expect(state?.lastVersionCode).toBe(99);
+  });
+
+  it.each([
+    ['业务码非 0', 200, { ret: { code: 204144660, msg: 'no permission' } }],
+    ['缺少 appInfo', 200, {}],
+    ['HTTP 403', 403, { message: 'forbidden' }],
+  ])('app-info %s 时报错，不把线上版本当作 0', async (_case, status, body) => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    mockToken();
+    mockAppId();
+    nock(HOST).get('/api/publish/v2/app-info').query(true).reply(status, body);
+    await expect(huaweiChannel.getMarketState!(pkg, config)).rejects.toBeInstanceOf(ApkpubError);
+  });
+
+  it('请求失败后清除缓存的 token，下次重新获取', async () => {
+    const pkg = `com.test.${randomUUID().slice(0, 8)}`;
+    mockToken();
+    mockAppId();
+    nock(HOST).get('/api/publish/v2/app-info').query(true).reply(200, {});
+    await expect(huaweiChannel.getMarketState!(pkg, config)).rejects.toBeInstanceOf(ApkpubError);
+
+    const tokenScope = nock(HOST).post('/api/oauth2/v1/token').reply(200, { access_token: 'tok-new' });
+    mockAppId();
+    nock(HOST)
+      .get('/api/publish/v2/app-info')
+      .query(true)
+      .reply(200, { appInfo: { releaseState: 0, versionCode: 5 } });
+    const state = await huaweiChannel.getMarketState!(pkg, config);
+    expect(state?.lastVersionCode).toBe(5);
+    expect(tokenScope.isDone()).toBe(true);
   });
 
   it('token 缺失时抛鉴权错误', async () => {

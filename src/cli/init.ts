@@ -3,7 +3,7 @@ import { input, confirm, checkbox, password } from '@inquirer/prompts';
 import { saveConfig, ensureConfigDirs } from '../config/store.js';
 import { CURRENT_SCHEMA_VERSION, type AppConfig, type ChannelConfig } from '../config/schema.js';
 import { getChannelMetas, type ChannelMeta } from '../channels/registry.js';
-import { printJson, isInteractive } from '../utils/output.js';
+import { printJson, isInteractive, exitAfterFlush } from '../utils/output.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { ExitCode } from '../core/result.js';
 import { parseApk, type ApkInfo } from '../apk/ApkParser.js';
@@ -136,14 +136,14 @@ export function registerInitCommand(program: Command): void {
             nextSteps: {
               requiredEnv,
               doctor: `apkpub doctor --app ${applicationId} --json`,
-              dryRun: `apkpub publish --app ${applicationId} --apk <apk-path> --dry-run --json --yes`,
+              dryRun: `apkpub publish --app ${applicationId} --apk <apk-path> --desc <更新描述> --dry-run --json --yes`,
             },
           });
         } else {
           process.stderr.write(`已创建应用配置: ${applicationId}\n`);
           process.stderr.write(`配置文件: ~/.apkpub/apps/${applicationId}.json\n`);
         }
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(ExitCode.SUCCESS);
       } catch (err) {
         const message = err instanceof ApkpubError ? err.message : String(err);
         if (options.json) {
@@ -151,7 +151,7 @@ export function registerInitCommand(program: Command): void {
         } else {
           process.stderr.write(`错误: ${message}\n`);
         }
-        process.exit(ExitCode.INVALID_ARGUMENT);
+        await exitAfterFlush(ExitCode.INVALID_ARGUMENT);
       }
     });
 }

@@ -1,4 +1,4 @@
-import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
+import { ErrorCode, toApkpubError } from '../errors/ApkpubError.js';
 
 /** 渠道执行状态 */
 export type ChannelStatus = 'success' | 'failed' | 'skipped' | 'dry_run';
@@ -39,6 +39,8 @@ export enum ExitCode {
   PARTIAL_FAILURE = 4,
   ALL_FAILED = 5,
   INTERNAL = 1,
+  /** 用户取消：确认提示选择「否」，或再次 Ctrl+C 强制退出 */
+  CANCELLED = 130,
 }
 
 export function aggregateResults(results: ChannelResult[], dryRun = false): PublishResult {
@@ -72,7 +74,8 @@ export function getExitCode(result: PublishResult): ExitCode {
 }
 
 export function channelResultFromError(name: string, label: string, err: unknown): ChannelResult {
-  const apkErr = err instanceof ApkpubError ? err : new ApkpubError({ code: ErrorCode.INTERNAL, message: String(err) });
+  // 非 ApkpubError 包装为 INTERNAL，消息取 err.message，避免出现「Error: 」前缀
+  const apkErr = toApkpubError(err);
   return {
     name,
     label,

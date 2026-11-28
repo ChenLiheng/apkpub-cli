@@ -2,8 +2,11 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
-import { createHttpClient, sleep, withRetry } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, sleep, withRetry, QUERY_TIMEOUT_MS } from '../../utils/http.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
+import { TokenCache } from '../tokenCache.js';
+
+const tokenCache = new TokenCache();
 
 const BASE_URL = 'https://connect-api.cloud.huawei.com';
 /** 编译状态轮询间隔 */
@@ -24,13 +27,13 @@ const appInfoSchema = z
     onShelfVersionNumber: z.coerce.string().optional(),
     versionName: z.coerce.string().optional(),
   })
-  .passthrough();
+  .loose();
 
 // 华为上传地址响应中 headers 可能是数组或对象两种形态
 const uploadHeadersSchema = z
   .union([
-    z.array(z.object({ key: z.string().optional(), name: z.string().optional(), value: z.string() }).passthrough()),
-    z.record(z.string()),
+    z.array(z.object({ key: z.string().optional(), name: z.string().optional(), value: z.string() }).loose()),
+    z.record(z.string(), z.string()),
   ])
   .optional();
 
@@ -49,7 +52,7 @@ function checkHwRet(respData: unknown, step: string, label: string, retryable = 
 }
 
 async function getToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
-  const client = createHttpClient({ signal });
+  const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
   const resp = await client.post(`${BASE_URL}/api/oauth2/v1/token`, {
     client_id: clientId,
     client_secret: clientSecret,
@@ -67,13 +70,29 @@ async function getToken(clientId: string, clientSecret: string, signal?: AbortSi
   });
 }
 
+/** 获取 token（带缓存），getMarketState 与 upload 共用 */
+function getCachedToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
+  // 共享的 token 请求不绑定调用方信号，避免一个调用方取消导致其他等待者一起失败；signal 只控制本调用方的等待
+  return tokenCache.get(clientId, clientSecret, () => getToken(clientId, clientSecret), signal);
+}
+
+/** 执行使用 token 的操作；失败时清除缓存的 token（可能已被吊销），下次重试重新获取 */
+async function withTokenInvalidation<T>(creds: { client_id: string; client_secret: string }, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    tokenCache.invalidate(creds.client_id, creds.client_secret);
+    throw err;
+  }
+}
+
 async function getAppId(
   clientId: string,
   token: string,
   packageName: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const client = createHttpClient({ signal });
+  const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
   const resp = await client.get(`${BASE_URL}/api/publish/v2/appid-list`, {
     headers: { client_id: clientId, Authorization: `Bearer ${token}` },
     params: { packageName },
@@ -228,24 +247,53 @@ export const huaweiChannel: Channel = {
   type: 'market',
   fileNameIdentify: 'HUAWEI',
   credentialSchema: credSchema,
-  async getMarketState(appId, config) {
+  async getMarketState(appId, config, options) {
     const creds = credSchema.parse(config);
-    const token = await getToken(creds.client_id, creds.client_secret);
-    const hwAppId = await getAppId(creds.client_id, token, appId);
-    const client = createHttpClient();
-    const resp = await client.get(`${BASE_URL}/api/publish/v2/app-info`, {
-      headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` },
-      params: { appId: hwAppId },
-    });
-    const info = appInfoSchema.parse((resp.data?.appInfo ?? resp.data) ?? {});
-    const reviewState = mapReviewState(info.releaseState ?? info.status);
-    return {
-      reviewState,
-      // 审核中不可重复提交；其余状态（含下架、待上架等）交由华为接口自行校验
-      enableSubmit: reviewState !== 'reviewing',
-      lastVersionCode: info.versionCode ?? 0,
-      lastVersionName: info.versionNumber ?? info.onShelfVersionNumber ?? info.versionName ?? '0',
-    };
+    const signal = options?.signal;
+    // 只读查询，网络抖动时整体重试
+    return withRetry(
+      () =>
+        withTokenInvalidation(creds, async () => {
+          const token = await getCachedToken(creds.client_id, creds.client_secret, signal);
+          const hwAppId = await getAppId(creds.client_id, token, appId, signal);
+          const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
+          const resp = await client.get(`${BASE_URL}/api/publish/v2/app-info`, {
+            headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` },
+            params: { appId: hwAppId },
+          });
+          // 必须确认拿到了真实的应用信息：接口报错时若按缺省值 0 处理，任何 APK 都会通过版本校验
+          if (resp.status >= 400) {
+            throw new ApkpubError({
+              code: ErrorCode.CHANNEL_STATE_FAILED,
+              channel: 'huawei',
+              step: 'getAppInfo',
+              message: `获取应用信息失败 (HTTP ${resp.status})`,
+              retryable: resp.status >= 500 || resp.status === 429,
+            });
+          }
+          const data = ensureJsonObject(resp.data, { channel: 'huawei', step: 'getAppInfo', status: resp.status });
+          checkHwRet(data, 'getAppInfo', '获取应用信息', false);
+          if (!data.appInfo || typeof data.appInfo !== 'object') {
+            throw new ApkpubError({
+              code: ErrorCode.CHANNEL_STATE_FAILED,
+              channel: 'huawei',
+              step: 'getAppInfo',
+              message: '获取应用信息失败：响应中缺少 appInfo，已中止以免跳过版本校验',
+              retryable: false,
+            });
+          }
+          const info = appInfoSchema.parse(data.appInfo);
+          const reviewState = mapReviewState(info.releaseState ?? info.status);
+          return {
+            reviewState,
+            // 审核中不可重复提交；其余状态（含下架、待上架等）交由华为接口自行校验
+            enableSubmit: reviewState !== 'reviewing',
+            lastVersionCode: info.versionCode ?? 0,
+            lastVersionName: info.versionNumber ?? info.onShelfVersionNumber ?? info.versionName ?? '0',
+          };
+        }),
+      { signal },
+    );
   },
   async validateCredentials(config) {
     const creds = credSchema.parse(config);
@@ -253,42 +301,44 @@ export const huaweiChannel: Channel = {
   },
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
-    const fileName = path.basename(ctx.filePath);
-    const { signal } = ctx;
-    const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
-    ctx.onProgress({ step: 'getToken' });
-    const token = await retry(() => getToken(creds.client_id, creds.client_secret, signal));
-    ctx.onProgress({ step: 'getAppId' });
-    const appId = await retry(() => getAppId(creds.client_id, token, ctx.apkInfo.applicationId, signal));
-    ctx.onProgress({ step: 'getUploadUrl' });
-    const uploadInfo = await retry(() =>
-      getUploadUrl(creds.client_id, token, appId, fileName, ctx.apkInfo.size, signal),
-    );
-    ctx.onProgress({ step: 'uploading', percent: 0 });
-    await retry(() =>
-      uploadFile(uploadInfo.url, uploadInfo.headers, ctx.filePath, (p) => ctx.onProgress({ step: 'uploading', percent: p }), signal),
-    );
-    ctx.onProgress({ step: 'bindApk' });
-    const bind = await bindApk(creds.client_id, token, appId, fileName, uploadInfo.objectId, signal);
-    ctx.onProgress({ step: 'waitCompile' });
-    await waitApkReady(creds.client_id, token, appId, bind.pkgId, signal);
-    ctx.onProgress({ step: 'updateDesc' });
-    const client = createHttpClient({ signal });
-    const descResp = await client.put(
-      `${BASE_URL}/api/publish/v2/app-language-info`,
-      // newFeatures 为「新版本特性」；appDesc 是应用详细介绍，不能用更新说明覆盖
-      { lang: 'zh-CN', newFeatures: ctx.desc },
-      { headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` }, params: { appId } },
-    );
-    checkHwRet(descResp.data, 'updateDesc', '更新版本描述');
-    ctx.onProgress({ step: 'submit' });
-    const submitResp = await client.post(`${BASE_URL}/api/publish/v2/app-submit`, null, {
-      headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` },
-      params: { appId },
+    return withTokenInvalidation(creds, async () => {
+      const fileName = path.basename(ctx.filePath);
+      const { signal } = ctx;
+      const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
+      ctx.onProgress({ step: 'getToken' });
+      const token = await retry(() => getCachedToken(creds.client_id, creds.client_secret, signal));
+      ctx.onProgress({ step: 'getAppId' });
+      const appId = await retry(() => getAppId(creds.client_id, token, ctx.apkInfo.applicationId, signal));
+      ctx.onProgress({ step: 'getUploadUrl' });
+      const uploadInfo = await retry(() =>
+        getUploadUrl(creds.client_id, token, appId, fileName, ctx.apkInfo.size, signal),
+      );
+      ctx.onProgress({ step: 'uploading', percent: 0 });
+      await retry(() =>
+        uploadFile(uploadInfo.url, uploadInfo.headers, ctx.filePath, (p) => ctx.onProgress({ step: 'uploading', percent: p }), signal),
+      );
+      ctx.onProgress({ step: 'bindApk' });
+      const bind = await bindApk(creds.client_id, token, appId, fileName, uploadInfo.objectId, signal);
+      ctx.onProgress({ step: 'waitCompile' });
+      await waitApkReady(creds.client_id, token, appId, bind.pkgId, signal);
+      ctx.onProgress({ step: 'updateDesc' });
+      const client = createHttpClient({ signal });
+      const descResp = await client.put(
+        `${BASE_URL}/api/publish/v2/app-language-info`,
+        // newFeatures 为「新版本特性」；appDesc 是应用详细介绍，不能用更新说明覆盖
+        { lang: 'zh-CN', newFeatures: ctx.desc },
+        { headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` }, params: { appId } },
+      );
+      checkHwRet(descResp.data, 'updateDesc', '更新版本描述');
+      ctx.onProgress({ step: 'submit' });
+      const submitResp = await client.post(`${BASE_URL}/api/publish/v2/app-submit`, null, {
+        headers: { client_id: creds.client_id, Authorization: `Bearer ${token}` },
+        params: { appId },
+      });
+      checkHwRet(submitResp.data, 'submit', '提交审核');
+      ctx.onProgress({ step: 'done', percent: 100 });
+      return { message: '提交审核成功' };
     });
-    checkHwRet(submitResp.data, 'submit', '提交审核');
-    ctx.onProgress({ step: 'done', percent: 100 });
-    return { message: '提交审核成功' };
   },
 };
 

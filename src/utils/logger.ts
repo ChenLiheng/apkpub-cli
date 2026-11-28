@@ -26,10 +26,10 @@ function formatMessage(level: LogLevel, tag: string, message: string): string {
 }
 
 function log(level: LogLevel, tag: string, message: string): void {
-  if (jsonMode && level !== 'error') return;
   if (level === 'debug' && !debugMode) return;
-  const stream = level === 'error' ? process.stderr : process.stderr;
-  stream.write(formatMessage(level, tag, message) + '\n');
+  // JSON 模式下屏蔽 info/warn；显式开启 --debug 时仍输出调试日志（走 stderr，不影响 JSON 解析）
+  if (jsonMode && level !== 'error' && level !== 'debug') return;
+  process.stderr.write(formatMessage(level, tag, message) + '\n');
 }
 
 export const logger = {

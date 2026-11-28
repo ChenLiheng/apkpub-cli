@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
 import { MarketStateCache } from '../marketCache.js';
-import { createHttpClient, ensureJsonObject } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, withRetry, QUERY_TIMEOUT_MS } from '../../utils/http.js';
 import { fileMd5 } from '../../utils/files.js';
 import { rsaEncrypt } from '../../signers/rsa.js';
 import { md5Hex } from '../../signers/md5.js';
@@ -26,7 +26,7 @@ const packageInfoSchema = z
     versionName: z.coerce.string().optional(),
     appName: z.coerce.string().optional(),
   })
-  .passthrough();
+  .loose();
 
 function buildSig(privateKey: string, hashes: { name: string; hash: string }[]): string {
   const sig = JSON.stringify({
@@ -45,30 +45,34 @@ export const miChannel: Channel = {
   type: 'market',
   fileNameIdentify: 'MI',
   credentialSchema: credSchema,
-  async getMarketState(appId, config) {
+  async getMarketState(appId, config, options) {
     const cached = queryCache.get(appId);
     if (cached) return cached.state;
     const creds = credSchema.parse(config);
-    const requestData = JSON.stringify({ userName: creds.account, packageName: appId });
-    const sigData = buildSig(creds.privateKey, [{ name: 'RequestData', hash: md5Hex(requestData) }]);
-    const client = createHttpClient();
-    const form = new URLSearchParams();
-    form.set('RequestData', requestData);
-    form.set('SIG', rsaEncrypt(sigData, creds.publicKey));
-    const resp = await client.post(QUERY_URL, form.toString(), {
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    });
-    const queryData = checkMiResult(resp.data, '获取App信息', resp.status);
-    const info = packageInfoSchema.parse(queryData.packageInfo ?? queryData);
-    const marketState = {
-      reviewState: 'online' as const,
-      enableSubmit: true,
-      lastVersionCode: info.versionCode ?? 0,
-      lastVersionName: info.versionName ?? '0',
-    };
-    const appName = info.appName ?? '';
-    queryCache.set(appId, { state: marketState, appName });
-    return marketState;
+    const signal = options?.signal;
+    // 只读查询，网络抖动时整体重试
+    return withRetry(async () => {
+      const requestData = JSON.stringify({ userName: creds.account, packageName: appId });
+      const sigData = buildSig(creds.privateKey, [{ name: 'RequestData', hash: md5Hex(requestData) }]);
+      const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
+      const form = new URLSearchParams();
+      form.set('RequestData', requestData);
+      form.set('SIG', rsaEncrypt(sigData, creds.publicKey));
+      const resp = await client.post(QUERY_URL, form.toString(), {
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      });
+      const queryData = checkMiResult(resp.data, '获取App信息', resp.status);
+      const info = packageInfoSchema.parse(queryData.packageInfo ?? queryData);
+      const marketState = {
+        reviewState: 'online' as const,
+        enableSubmit: true,
+        lastVersionCode: info.versionCode ?? 0,
+        lastVersionName: info.versionName ?? '0',
+      };
+      const appName = info.appName ?? '';
+      queryCache.set(appId, { state: marketState, appName });
+      return marketState;
+    }, { signal });
   },
   async validateCredentials(config) {
     credSchema.parse(config);
@@ -76,7 +80,7 @@ export const miChannel: Channel = {
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
     ctx.onProgress({ step: 'getAppInfo' });
-    await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
+    await miChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config, { signal: ctx.signal });
     const appName = queryCache.get(ctx.apkInfo.applicationId)?.appName || ctx.apkInfo.appName;
     if (!appName) {
       throw new ApkpubError({

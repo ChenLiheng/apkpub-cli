@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import FormData from 'form-data';
 import type { Channel, MarketInfo, UploadContext } from '../Channel.js';
 import { MarketStateCache } from '../marketCache.js';
-import { createHttpClient, ensureJsonObject } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, withRetry, QUERY_TIMEOUT_MS } from '../../utils/http.js';
 import { fileMd5 } from '../../utils/files.js';
 import { vivoSignParams } from '../../signers/hmac.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
@@ -25,7 +25,7 @@ const appDetailSchema = z
     versionName: z.coerce.string().optional(),
     onlineType: z.coerce.number().optional(),
   })
-  .passthrough();
+  .loose();
 
 function buildUrl(method: string, params: Record<string, string>, accessKey: string, accessSecret: string): string {
   const signed = vivoSignParams(accessKey, accessSecret, method, params);
@@ -42,22 +42,26 @@ export const vivoChannel: Channel = {
   type: 'market',
   fileNameIdentify: 'VIVO',
   credentialSchema: credSchema,
-  async getMarketState(appId, config) {
+  async getMarketState(appId, config, options) {
     const cached = queryCache.get(appId);
     if (cached) return cached.state;
     const creds = credSchema.parse(config);
-    const client = createHttpClient();
-    const url = buildUrl('app.query.details', { packageName: appId }, creds.access_key, creds.access_secret);
-    const resp = await client.get(url);
-    const data = appDetailSchema.parse(checkVivoResult(resp.data, '查询应用详情', resp.status).data ?? {});
-    const marketState = {
-      reviewState: 'online' as const,
-      enableSubmit: true,
-      lastVersionCode: data.versionCode ?? 0,
-      lastVersionName: data.versionName ?? '0',
-    };
-    queryCache.set(appId, { state: marketState, onlineType: data.onlineType ?? 1 });
-    return marketState;
+    const signal = options?.signal;
+    // 只读查询，网络抖动时整体重试
+    return withRetry(async () => {
+      const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
+      const url = buildUrl('app.query.details', { packageName: appId }, creds.access_key, creds.access_secret);
+      const resp = await client.get(url);
+      const data = appDetailSchema.parse(checkVivoResult(resp.data, '查询应用详情', resp.status).data ?? {});
+      const marketState = {
+        reviewState: 'online' as const,
+        enableSubmit: true,
+        lastVersionCode: data.versionCode ?? 0,
+        lastVersionName: data.versionName ?? '0',
+      };
+      queryCache.set(appId, { state: marketState, onlineType: data.onlineType ?? 1 });
+      return marketState;
+    }, { signal });
   },
   async validateCredentials(config) {
     credSchema.parse(config);
@@ -66,7 +70,7 @@ export const vivoChannel: Channel = {
     const creds = credSchema.parse(ctx.config);
     const client = createHttpClient({ timeout: 600_000, signal: ctx.signal });
     ctx.onProgress({ step: 'getAppInfo' });
-    await vivoChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config);
+    await vivoChannel.getMarketState!(ctx.apkInfo.applicationId, ctx.config, { signal: ctx.signal });
     const cached = queryCache.get(ctx.apkInfo.applicationId);
     const appInfo = cached ?? { onlineType: 1 };
     ctx.onProgress({ step: 'uploading', percent: 0 });

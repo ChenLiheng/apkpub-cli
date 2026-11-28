@@ -1,7 +1,6 @@
 import pLimit from 'p-limit';
 import type { AppConfig } from '../config/schema.js';
 import type { Channel } from '../channels/Channel.js';
-import { resolveConfigSecrets, resolveCustomChannelSecrets } from '../secrets/resolver.js';
 import { checkPackageMatch, checkSubmittable, checkVersion } from './versionCheck.js';
 import { TaskLauncher } from './TaskLauncher.js';
 import {
@@ -13,6 +12,30 @@ import {
 import { writeAuditLog } from '../config/store.js';
 import { logger } from '../utils/logger.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
+import { parseApk, type ApkInfo } from '../apk/ApkParser.js';
+
+/** 取消时抛出统一的「操作已取消」错误 */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false });
+  }
+}
+
+/** 创建按文件路径缓存的 APK 解析函数：单文件发布到多个渠道时只解析一次，每个渠道拿到独立副本 */
+function createCachedParser(): (filePath: string) => Promise<ApkInfo> {
+  const cache = new Map<string, Promise<ApkInfo>>();
+  return async (filePath) => {
+    let pending = cache.get(filePath);
+    if (!pending) {
+      pending = parseApk(filePath);
+      // 解析失败不缓存，交由各渠道各自报错
+      pending.catch(() => cache.delete(filePath));
+      cache.set(filePath, pending);
+    }
+    // 返回副本，避免某个渠道修改后影响其他渠道
+    return { ...(await pending) };
+  };
+}
 
 export interface DispatchOptions {
   appConfig: AppConfig;
@@ -30,6 +53,7 @@ export class Dispatcher {
   async dispatch(options: DispatchOptions): Promise<PublishResult> {
     const { appConfig, channels, apkPath, updateDesc, dryRun, parallel = 1, signal } = options;
     const limit = pLimit(Math.max(1, parallel));
+    const cachedParseApk = createCachedParser();
 
     const tasks = channels.map((channel) => {
       const chConfig = appConfig.channels.find((c) => c.name === channel.name);
@@ -47,24 +71,31 @@ export class Dispatcher {
           channelConfig: chConfig,
           apkPath,
           enableChannel: appConfig.enableChannel,
+          parseApk: cachedParseApk,
         });
 
         try {
-          const secretOptions = {
-            service: 'apkpub-cli',
-            account: `${appConfig.applicationId}/${channel.name}`,
-          };
-          const rawParams = TaskLauncher.getRawParams(chConfig);
-          const resolved = await resolveConfigSecrets(rawParams, secretOptions);
-          const resolvedChannelConfig =
-            chConfig.type === 'custom' ? await resolveCustomChannelSecrets(chConfig, secretOptions) : chConfig;
-          launcher.injectConfig(resolved, resolvedChannelConfig);
+          throwIfAborted(signal);
+          await launcher.resolveConfig(appConfig.applicationId);
           await launcher.selectFile();
           const apkInfo = await launcher.prepare();
+          logger.debug(
+            channel.name,
+            `已选择 ${launcher.getFilePath()}：${apkInfo.applicationId} ${apkInfo.versionName}(${apkInfo.versionCode})`,
+          );
           checkPackageMatch(apkInfo, appConfig.applicationId);
 
           if (channel.getMarketState) {
-            const marketState = await channel.getMarketState(appConfig.applicationId, launcher.getConfig());
+            throwIfAborted(signal);
+            const marketState = await channel.getMarketState(appConfig.applicationId, launcher.getConfig(), {
+              signal,
+            });
+            logger.debug(
+              channel.name,
+              marketState
+                ? `线上状态 ${marketState.reviewState}，版本 ${marketState.lastVersionName}(${marketState.lastVersionCode})`
+                : '未返回线上状态',
+            );
             checkVersion(apkInfo, marketState, channel.name);
             checkSubmittable(marketState, channel.name);
           }
@@ -74,9 +105,7 @@ export class Dispatcher {
             return { name: channel.name, label: channel.label, status: 'dry_run' };
           }
 
-          if (signal?.aborted) {
-            throw new ApkpubError({ code: ErrorCode.TIMEOUT, message: '操作已取消', retryable: false });
-          }
+          throwIfAborted(signal);
 
           const result = await channel.upload({
             apkInfo,
@@ -89,12 +118,15 @@ export class Dispatcher {
             signal: signal ?? AbortSignal.timeout(24 * 60 * 60 * 1000),
           });
 
+          // 上传已成功：审计日志写入失败只告警，不能把已提交的渠道误报为失败
           await writeAuditLog({
             action: 'publish',
             appId: appConfig.applicationId,
             channels: [channel.name],
             versionCode: apkInfo.versionCode,
             result: 'success',
+          }).catch((err: unknown) => {
+            logger.warn(channel.name, `审计日志写入失败: ${err instanceof Error ? err.message : String(err)}`);
           });
 
           return {
@@ -110,7 +142,12 @@ export class Dispatcher {
             appId: appConfig.applicationId,
             channels: [channel.name],
             result: 'failed',
-          }).catch(() => {});
+          }).catch((auditErr: unknown) => {
+            logger.warn(
+              channel.name,
+              `审计日志写入失败: ${auditErr instanceof Error ? auditErr.message : String(auditErr)}`,
+            );
+          });
           return channelResultFromError(channel.name, channel.label, err);
         }
       };

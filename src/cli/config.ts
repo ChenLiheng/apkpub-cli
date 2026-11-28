@@ -10,7 +10,7 @@ import {
 import { stripSecrets, type ChannelConfig } from '../config/schema.js';
 import { getBuiltinChannels } from '../channels/registry.js';
 import { runConfigUi } from './configUi.js';
-import { printJson } from '../utils/output.js';
+import { printJson, exitAfterFlush } from '../utils/output.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { ExitCode } from '../core/result.js';
 
@@ -30,7 +30,7 @@ export function registerConfigCommand(program: Command): void {
           process.stderr.write(`${c.applicationId} - ${c.name}\n`);
         }
       }
-      process.exit(ExitCode.SUCCESS);
+      await exitAfterFlush(ExitCode.SUCCESS);
     });
 
   config
@@ -45,9 +45,9 @@ export function registerConfigCommand(program: Command): void {
         } else {
           process.stderr.write(JSON.stringify(stripSecrets(cfg), null, 2) + '\n');
         }
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(ExitCode.SUCCESS);
       } catch (err) {
-        handleError(err, options.json);
+        await handleError(err, options.json);
       }
     });
 
@@ -109,9 +109,9 @@ export function registerConfigCommand(program: Command): void {
           } else {
             process.stderr.write(`已更新渠道 ${channel.name} 配置\n`);
           }
-          process.exit(ExitCode.SUCCESS);
+          await exitAfterFlush(ExitCode.SUCCESS);
         } catch (err) {
-          handleError(err, options.json);
+          await handleError(err, options.json);
         }
       },
     );
@@ -135,9 +135,9 @@ export function registerConfigCommand(program: Command): void {
           }
         }
         await runConfigUi(appId, { port, open: options.open });
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(ExitCode.SUCCESS);
       } catch (err) {
-        handleError(err, false);
+        await handleError(err, false);
       }
     });
 
@@ -155,9 +155,9 @@ export function registerConfigCommand(program: Command): void {
         } else {
           process.stdout.write(content + '\n');
         }
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(ExitCode.SUCCESS);
       } catch (err) {
-        handleError(err, false);
+        await handleError(err, false);
       }
     });
 
@@ -168,9 +168,9 @@ export function registerConfigCommand(program: Command): void {
       try {
         const cfg = await importConfig(file);
         process.stderr.write(`已导入: ${cfg.applicationId}\n`);
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(ExitCode.SUCCESS);
       } catch (err) {
-        handleError(err, false);
+        await handleError(err, false);
       }
     });
 }
@@ -232,12 +232,12 @@ function resolveOrCreateChannel(
   return created;
 }
 
-function handleError(err: unknown, json?: boolean): never {
+async function handleError(err: unknown, json?: boolean): Promise<never> {
   const message = err instanceof ApkpubError ? err.message : String(err);
   if (json) {
     printJson({ ok: false, error: { message } });
   } else {
     process.stderr.write(`错误: ${message}\n`);
   }
-  process.exit(ExitCode.INVALID_ARGUMENT);
+  return exitAfterFlush(ExitCode.INVALID_ARGUMENT);
 }

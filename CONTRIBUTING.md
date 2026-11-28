@@ -8,7 +8,7 @@
 
 ## 开发环境
 
-- Node.js >= 18
+- Node.js >= 20
 - pnpm 10+（仓库已通过 `packageManager` 字段锁定版本）
 
 ```bash
