@@ -4,17 +4,8 @@ import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { redactMessage } from './redaction.js';
 
-const PRIVATE_IP_PATTERNS = [
-  /^localhost$/i,
-  /\.localhost$/i,
-  /^127\./,
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^0\.0\.0\.0$/,
-  /^\[::1\]$/,
-  /^169\.254\./,
-];
+/** 本机主机名；IP 形式的私网地址由下方 IPv4/IPv6 网段检查覆盖 */
+const LOCAL_HOSTNAME_PATTERNS = [/^localhost$/i, /\.localhost$/i];
 
 const HTTP_WARNING = '检测到 HTTP 明文 URL，仅为兼容旧配置继续执行；建议改用 HTTPS';
 
@@ -117,7 +108,7 @@ function isPrivateIPv6(host: string): boolean {
 function isBlockedHost(host: string): boolean {
   const normalized = normalizeHost(host);
   return (
-    PRIVATE_IP_PATTERNS.some((p) => p.test(host) || p.test(normalized)) ||
+    LOCAL_HOSTNAME_PATTERNS.some((p) => p.test(normalized)) ||
     isPrivateIPv4(normalized) ||
     isPrivateIPv6(normalized)
   );
@@ -199,6 +190,9 @@ function assertSafeRedirect(options: RedirectOptions): void {
   assertSafeUrl(`${protocol}//${host}${path}`, '重定向地址', { allowHttp: true, warnOnHttp: true });
 }
 
+/** 查询类请求（取 token、查应用 / 线上状态）超时：远小于上传超时，避免市场不可达时 status 长时间卡住 */
+export const QUERY_TIMEOUT_MS = 20_000;
+
 /** 创建带超时、取消信号与重定向校验的 HTTP 客户端 */
 export function createHttpClient(options?: { timeout?: number; signal?: AbortSignal }): AxiosInstance {
   return axios.create({
@@ -228,12 +222,44 @@ export async function withRetry<T>(
     } catch (err) {
       lastError = err;
       if (options.signal?.aborted || axios.isCancel(err)) throw cancelledError();
-      const retryable = err instanceof ApkpubError ? err.retryable : true;
-      if (!retryable || i === retries) break;
-      await sleep(delayMs * Math.pow(2, i), options.signal);
+      if (!isRetryableError(err) || i === retries) break;
+      await sleep(withJitter(delayMs * Math.pow(2, i)), options.signal);
     }
   }
   throw lastError;
+}
+
+/** 网络层可重试的系统错误码 */
+const RETRYABLE_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ERR_NETWORK',
+  'ERR_SOCKET_CONNECTION_TIMEOUT',
+]);
+
+/** 判断错误是否值得重试：ApkpubError 看 retryable，网络类错误重试，其余（编程错误、校验失败）不重试 */
+export function isRetryableError(err: unknown): boolean {
+  if (err instanceof ApkpubError) return err.retryable;
+  if (axios.isAxiosError(err)) {
+    // 收到响应的按状态码判断；无响应（连接失败、超时）均可重试
+    if (err.response) return err.response.status >= 500 || err.response.status === 429;
+    return true;
+  }
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && RETRYABLE_NETWORK_CODES.has(code);
+}
+
+/** 为退避时间加入 ±20% 随机抖动，避免多渠道同时重试打到同一时刻 */
+function withJitter(ms: number): number {
+  if (ms <= 0) return 0;
+  return Math.round(ms * (0.8 + Math.random() * 0.4));
 }
 
 /** 可被取消的延时；取消时抛「操作已取消」 */

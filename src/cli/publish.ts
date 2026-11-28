@@ -1,25 +1,39 @@
 import { Command } from 'commander';
+import path from 'node:path';
+import { confirm } from '@inquirer/prompts';
+import pc from 'picocolors';
 import { loadConfig } from '../config/store.js';
 import { Dispatcher } from '../core/Dispatcher.js';
 import { getExitCode, ExitCode } from '../core/result.js';
-import { resolveChannels } from '../channels/registry.js';
-import { printJson, printPublishResult, isInteractive } from '../utils/output.js';
-import { setJsonMode } from '../utils/logger.js';
-import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
+import { preparePublishInputs } from '../core/preflight.js';
+import type { Channel } from '../channels/Channel.js';
+import { printJson, printPublishResult, isInteractive, exitAfterFlush } from '../utils/output.js';
+import { setDebugMode, setJsonMode } from '../utils/logger.js';
+import { ApkpubError, ErrorCode, toApkpubError } from '../errors/ApkpubError.js';
+import { getErrorExitCode } from './exitCodes.js';
 
-function getErrorExitCode(err: ApkpubError): ExitCode {
-  switch (err.code) {
-    case ErrorCode.VERSION_TOO_LOW:
-      return ExitCode.VERSION_CHECK_FAILED;
-    case ErrorCode.INVALID_ARGUMENT:
-    case ErrorCode.CONFIG_NOT_FOUND:
-    case ErrorCode.CONFIG_INVALID:
-    case ErrorCode.APK_NOT_FOUND:
-    case ErrorCode.APK_AMBIGUOUS:
-    case ErrorCode.CHANNEL_NOT_FOUND:
-      return ExitCode.INVALID_ARGUMENT;
-    default:
-      return ExitCode.INTERNAL;
+/** 交互模式下展示发布摘要并请求确认；Ctrl+C 退出提示视为取消 */
+async function confirmPublish(summary: {
+  app: string;
+  apk: string;
+  channels: Channel[];
+  desc: string;
+}): Promise<boolean> {
+  process.stderr.write(
+    [
+      '',
+      pc.bold('即将发布：'),
+      `  应用: ${summary.app}`,
+      `  APK:  ${path.resolve(summary.apk)}`,
+      `  渠道: ${summary.channels.map((c) => c.label).join('、')}`,
+      `  描述: ${summary.desc}`,
+      '',
+    ].join('\n'),
+  );
+  try {
+    return await confirm({ message: '确认提交到以上渠道？', default: false }, { output: process.stderr });
+  } catch {
+    return false;
   }
 }
 
@@ -43,7 +57,7 @@ function createInterruptController(): { signal: AbortSignal; dispose: () => void
   const controller = new AbortController();
   const onSignal = (): void => {
     if (controller.signal.aborted) {
-      process.exit(130);
+      process.exit(ExitCode.CANCELLED);
     }
     process.stderr.write('\n收到中断信号，正在取消发布（再次按 Ctrl+C 强制退出）...\n');
     controller.abort();
@@ -87,36 +101,33 @@ export function registerPublishCommand(program: Command): void {
     }) => {
       const jsonMode = options.json || !isInteractive();
       setJsonMode(jsonMode);
+      setDebugMode(!!options.debug);
 
       try {
         const appConfig = await loadConfig(options.app);
-        const updateDesc = options.desc ?? appConfig.extension.updateDesc ?? '';
-        if (!updateDesc.trim()) {
-          throw new ApkpubError({
-            code: ErrorCode.INVALID_ARGUMENT,
-            message: '请通过 --desc 提供更新描述',
-            retryable: false,
-          });
-        }
-
-        const channelNames = options.channels;
-        const channels = resolveChannels(appConfig, channelNames);
-        if (channels.length === 0) {
-          throw new ApkpubError({
-            code: ErrorCode.CHANNEL_NOT_FOUND,
-            message: '没有可用的发布渠道',
-            retryable: false,
-          });
-        }
-
+        const { channels, updateDesc } = preparePublishInputs(appConfig, {
+          channels: options.channels,
+          desc: options.desc,
+        });
         const parallel = parseParallel(options.parallel, channels.length);
+
+        // 仅在人工交互（非 JSON、非 dry-run）且未传 --yes 时二次确认；CI / Agent 场景无 TTY，不受影响
+        if (!jsonMode && !options.dryRun && !options.yes) {
+          const confirmed = await confirmPublish({ app: options.app, apk: options.apk, channels, desc: updateDesc });
+          if (!confirmed) {
+            process.stderr.write('已取消发布\n');
+            // 与成功区分开，避免脚本误以为已发布
+            await exitAfterFlush(ExitCode.CANCELLED);
+          }
+        }
+
         const interrupt = createInterruptController();
         const dispatcher = new Dispatcher();
         const result = await dispatcher.dispatch({
           appConfig,
           channels,
           apkPath: options.apk,
-          updateDesc: updateDesc.trim(),
+          updateDesc,
           dryRun: options.dryRun,
           parallel,
           signal: interrupt.signal,
@@ -133,15 +144,15 @@ export function registerPublishCommand(program: Command): void {
         } else {
           printPublishResult(result);
         }
-        process.exit(getExitCode(result));
+        await exitAfterFlush(getExitCode(result));
       } catch (err) {
-        const apkErr = err instanceof ApkpubError ? err : new ApkpubError({ code: ErrorCode.INTERNAL, message: String(err) });
+        const apkErr = toApkpubError(err);
         if (jsonMode) {
           printJson({ ok: false, error: { code: apkErr.code, message: apkErr.message, retryable: apkErr.retryable } });
         } else {
           process.stderr.write(`错误: ${apkErr.message}\n`);
         }
-        process.exit(getErrorExitCode(apkErr));
+        await exitAfterFlush(getErrorExitCode(apkErr));
       }
     });
 }

@@ -120,3 +120,18 @@ describe('resolveCustomChannelSecrets', () => {
     ).rejects.toMatchObject({ code: ErrorCode.SECRET_RESOLVE_FAILED });
   });
 });
+
+describe('decrypt 失败', () => {
+  afterEach(() => {
+    delete process.env.APKPUB_MASTER_KEY;
+  });
+
+  it('主密钥错误时抛 SECRET_RESOLVE_FAILED 并给出可读提示', async () => {
+    const encrypted = encryptValue('hello', 'right-key');
+    process.env.APKPUB_MASTER_KEY = 'wrong-key';
+    await expect(resolveSecret(encrypted)).rejects.toMatchObject({
+      code: ErrorCode.SECRET_RESOLVE_FAILED,
+      message: expect.stringContaining('APKPUB_MASTER_KEY'),
+    });
+  });
+});

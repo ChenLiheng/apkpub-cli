@@ -22,13 +22,13 @@ const COMMANDS = [
       { name: '--app', required: true, description: '应用包名' },
       { name: '--apk', required: true, description: 'APK 文件或目录' },
       { name: '--channels', required: false, description: '渠道列表' },
-      { name: '--desc', required: false, description: '更新描述' },
+      { name: '--desc', required: false, description: '更新描述；配置中未设置 extension.updateDesc 时必填（dry-run 同样）' },
       { name: '--parallel', required: false, description: '并行数' },
       { name: '--dry-run', required: false, description: '仅预检' },
-      { name: '--yes', required: false, description: '跳过交互确认' },
+      { name: '--yes', required: false, description: '跳过交互确认（仅终端交互模式下会提示确认）' },
       { name: '--json', required: false, description: 'JSON 输出' },
       { name: '--no-progress', required: false, description: '禁用进度显示' },
-      { name: '--debug', required: false, description: '调试模式' },
+      { name: '--debug', required: false, description: '调试模式：在 stderr 输出调试日志' },
     ],
   },
   {
@@ -61,14 +61,25 @@ const COMMANDS = [
     description: '启动 MCP server 模式',
     options: [],
   },
+  {
+    name: 'skill',
+    description: '管理随包发布的 Agent skill：install [--force] [--all] / status / uninstall [--force]',
+    options: [
+      { name: '--force', required: false, description: 'install：覆盖被修改过的文件（先备份）；uninstall：同时删除被修改过的文件' },
+      { name: '--all', required: false, description: 'install：为所有支持的 Agent 安装，即使未检测到' },
+      { name: '--json', required: false, description: 'JSON 输出' },
+    ],
+  },
 ];
 
 const AGENT_WORKFLOW = [
   'apkpub_describe 或 apkpub describe --json',
   'apkpub_info 或 apkpub info <apk> --json',
-  'apkpub_doctor 或 apkpub doctor --app <id> --json',
-  'apkpub_publish dryRun=true 或 apkpub publish --dry-run --json --yes',
-  'apkpub_publish dryRun=false 或 apkpub publish --json --yes --no-progress',
+  'apkpub_doctor 或 apkpub doctor --app <id> --json（CONFIG_NOT_FOUND 时先运行 apkpub init --name <名称> --app <id> --channels <渠道> --json）',
+  'apkpub_status 或 apkpub status --app <id> --json',
+  'apkpub_publish dryRun=true 或 apkpub publish --app <id> --apk <path> --desc <描述> --dry-run --json --yes',
+  '向用户确认版本、渠道与更新描述（正式发布提交到市场后无法撤回）',
+  'apkpub_publish dryRun=false 或 apkpub publish --app <id> --apk <path> --desc <描述> --json --yes --no-progress',
 ];
 
 function defaultEnvName(channel: string, field: string): string {
@@ -94,10 +105,11 @@ export function buildDescriptor(): Record<string, unknown> {
     exitCodes: {
       [ExitCode.SUCCESS]: '全部成功',
       [ExitCode.INTERNAL]: '内部错误',
-      [ExitCode.INVALID_ARGUMENT]: '参数/配置错误',
+      [ExitCode.INVALID_ARGUMENT]: '参数/配置/密钥错误',
       [ExitCode.VERSION_CHECK_FAILED]: '版本校验失败',
-      [ExitCode.PARTIAL_FAILURE]: '部分渠道失败',
-      [ExitCode.ALL_FAILED]: '全部失败',
+      [ExitCode.PARTIAL_FAILURE]: '部分渠道失败（publish / status）',
+      [ExitCode.ALL_FAILED]: '全部失败（publish / status；doctor 存在未通过渠道）',
+      [ExitCode.CANCELLED]: '用户取消（publish 确认提示选择否，或再次 Ctrl+C 强制退出）',
     },
     errorCodes: Object.values(ErrorCode),
     jsonSchema: {

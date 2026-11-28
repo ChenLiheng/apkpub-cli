@@ -151,14 +151,24 @@ async function decryptValue(encrypted: string): Promise<string> {
       retryable: false,
     });
   }
-  const key = deriveKey(masterKey, salt!);
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
-  decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(cipherHex, 'hex')),
-    decipher.final(),
-  ]);
-  return decrypted.toString('utf8');
+  try {
+    const key = deriveKey(masterKey, salt!);
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(cipherHex, 'hex')),
+      decipher.final(),
+    ]);
+    return decrypted.toString('utf8');
+  } catch (err) {
+    // GCM 认证失败通常意味着 APKPUB_MASTER_KEY 与加密时不一致，或密文被篡改
+    throw new ApkpubError({
+      code: ErrorCode.SECRET_RESOLVE_FAILED,
+      message: '解密失败：APKPUB_MASTER_KEY 不正确或加密值已损坏',
+      retryable: false,
+      cause: err,
+    });
+  }
 }
 
 function looksLikeSecret(value: string): boolean {

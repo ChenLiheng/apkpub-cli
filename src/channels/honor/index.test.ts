@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { honorChannel, parseUploadUrlResponse, buildBindFileBody } from './index.js';
 import type { UploadContext } from '../Channel.js';
+import { clearAllTokenCaches } from '../tokenCache.js';
 import { ApkpubError } from '../../errors/ApkpubError.js';
 
 const API = 'https://appmarket-openapi-drcn.cloud.honor.com';
@@ -27,6 +28,7 @@ afterAll(() => {
 
 afterEach(() => {
   nock.cleanAll();
+  clearAllTokenCaches();
 });
 
 function makeCtx(pkg: string): UploadContext {

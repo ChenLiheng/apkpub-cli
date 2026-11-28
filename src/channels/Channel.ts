@@ -29,6 +29,11 @@ export interface UploadContext {
   signal: AbortSignal;
 }
 
+/** 市场状态查询选项 */
+export interface MarketStateOptions {
+  signal?: AbortSignal;
+}
+
 /** 渠道接口 */
 export interface Channel {
   name: string;
@@ -36,7 +41,12 @@ export interface Channel {
   type: 'market' | 'custom';
   fileNameIdentify: string;
   credentialSchema: ZodSchema;
-  getMarketState?(appId: string, config: Record<string, unknown>): Promise<MarketInfo | undefined>;
+  /** 查询线上状态与版本；signal 用于响应取消 */
+  getMarketState?(
+    appId: string,
+    config: Record<string, unknown>,
+    options?: MarketStateOptions,
+  ): Promise<MarketInfo | undefined>;
   upload(ctx: UploadContext): Promise<UploadResult>;
   /** 预检凭证（doctor 用） */
   validateCredentials?(config: Record<string, unknown>): Promise<void>;

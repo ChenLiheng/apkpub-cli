@@ -8,9 +8,9 @@ import { z } from 'zod';
 import { parseApk } from '../apk/ApkParser.js';
 import { loadConfig } from '../config/store.js';
 import { Dispatcher } from '../core/Dispatcher.js';
-import { resolveChannels } from '../channels/registry.js';
-import { resolveConfigSecrets } from '../secrets/resolver.js';
-import { TaskLauncher } from '../core/TaskLauncher.js';
+import { queryMarketStatus, runDoctor } from '../core/inspect.js';
+import { preparePublishInputs } from '../core/preflight.js';
+import { toApkpubError } from '../errors/ApkpubError.js';
 import { buildDescriptor } from '../cli/descriptor.js';
 import { PACKAGE_VERSION } from '../version.js';
 
@@ -126,36 +126,28 @@ export async function startMcpServer(): Promise<void> {
         case 'apkpub_status': {
           const { app, channels: channelNames } = statusSchema.parse(params);
           const appConfig = await loadConfig(app);
-          const channels = resolveChannels(appConfig, channelNames);
-          const results = [];
-          for (const channel of channels) {
-            if (!channel.getMarketState) {
-              results.push({ channel: channel.name, state: 'n/a' });
-              continue;
-            }
-            const chConfig = appConfig.channels.find((c) => c.name === channel.name);
-            if (!chConfig) {
-              results.push({ channel: channel.name, error: `渠道 ${channel.name} 未在配置中启用` });
-              continue;
-            }
-            const rawParams = TaskLauncher.getRawParams(chConfig);
-            const resolved = await resolveConfigSecrets(rawParams);
-            const state = await channel.getMarketState(appConfig.applicationId, resolved);
-            results.push({ channel: channel.name, ...state });
-          }
-          const output = { ok: true, results };
+          // 单渠道查询失败只记录在该渠道结果中，不影响其他渠道
+          const results = (await queryMarketStatus(appConfig, channelNames)).map((r) =>
+            r.unsupported
+              ? { channel: r.name, state: 'n/a' }
+              : r.ok
+                ? { channel: r.name, ...r.state }
+                : { channel: r.name, error: r.error?.message, code: r.error?.code },
+          );
+          const output = { ok: results.every((r) => !('error' in r)), results };
           return createMcpJsonResponse(output);
         }
         case 'apkpub_publish': {
           const { app, apk, channels: channelNames, desc, dryRun, parallel } = publishSchema.parse(params);
           const appConfig = await loadConfig(app);
-          const channels = resolveChannels(appConfig, channelNames);
+          // 与 CLI 相同的发布前校验：更新描述非空、至少一个可用渠道
+          const { channels, updateDesc } = preparePublishInputs(appConfig, { channels: channelNames, desc });
           const dispatcher = new Dispatcher();
           const result = await dispatcher.dispatch({
             appConfig,
             channels,
             apkPath: apk,
-            updateDesc: desc ?? appConfig.extension.updateDesc ?? '',
+            updateDesc,
             dryRun,
             parallel: parallel ?? 1,
           });
@@ -164,23 +156,9 @@ export async function startMcpServer(): Promise<void> {
         case 'apkpub_doctor': {
           const { app } = doctorSchema.parse(params);
           const appConfig = await loadConfig(app);
-          const channels = resolveChannels(appConfig);
-          const checks = [];
-          for (const channel of channels) {
-            const chConfig = appConfig.channels.find((c) => c.name === channel.name);
-            if (!chConfig) {
-              checks.push({ channel: channel.name, ok: false, error: `渠道 ${channel.name} 未在配置中启用` });
-              continue;
-            }
-            try {
-              const rawParams = TaskLauncher.getRawParams(chConfig);
-              const resolved = await resolveConfigSecrets(rawParams);
-              if (channel.validateCredentials) await channel.validateCredentials(resolved);
-              checks.push({ channel: channel.name, ok: true });
-            } catch (err) {
-              checks.push({ channel: channel.name, ok: false, error: String(err) });
-            }
-          }
+          const checks = (await runDoctor(appConfig)).map((r) =>
+            r.ok ? { channel: r.name, ok: true } : { channel: r.name, ok: false, error: r.error?.message },
+          );
           const output = { ok: checks.every((c) => c.ok), checks };
           return createMcpJsonResponse(output);
         }
@@ -188,8 +166,9 @@ export async function startMcpServer(): Promise<void> {
           return { content: [{ type: 'text', text: JSON.stringify({ error: `未知工具: ${name}` }) }], isError: true };
       }
     } catch (err) {
+      const apkErr = toApkpubError(err);
       return {
-        content: [{ type: 'text', text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }],
+        content: [{ type: 'text', text: JSON.stringify({ error: apkErr.message, code: apkErr.code }) }],
         isError: true,
       };
     }

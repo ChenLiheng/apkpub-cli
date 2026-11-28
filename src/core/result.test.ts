@@ -93,3 +93,10 @@ describe('channelResultFromError', () => {
     expect(result.error?.message).toContain('boom');
   });
 });
+
+describe('channelResultFromError（普通 Error）', () => {
+  it('普通 Error 包装为 INTERNAL，消息不带「Error: 」前缀', () => {
+    const result = channelResultFromError('mi', '小米', new Error('上传失败'));
+    expect(result.error).toMatchObject({ code: ErrorCode.INTERNAL, message: '上传失败' });
+  });
+});

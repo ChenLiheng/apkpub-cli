@@ -2,10 +2,13 @@ import { z } from 'zod';
 import path from 'node:path';
 import FormData from 'form-data';
 import type { Channel, UploadContext } from '../Channel.js';
-import { createHttpClient, ensureJsonObject, withRetry } from '../../utils/http.js';
+import { createHttpClient, ensureJsonObject, withRetry, QUERY_TIMEOUT_MS } from '../../utils/http.js';
 import { fileSha256 } from '../../utils/files.js';
 import { ApkpubError, ErrorCode } from '../../errors/ApkpubError.js';
 import { createReadStream } from 'node:fs';
+import { TokenCache } from '../tokenCache.js';
+
+const tokenCache = new TokenCache();
 
 const BASE_URL = 'https://appmarket-openapi-drcn.cloud.honor.com';
 const TOKEN_URL = 'https://iam.developer.honor.com/auth/token';
@@ -24,10 +27,10 @@ const releaseInfoSchema = z
     versionCode: z.coerce.number().optional(),
     versionName: z.coerce.string().optional(),
   })
-  .passthrough();
+  .loose();
 
 async function getToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
-  const client = createHttpClient({ signal });
+  const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
   const resp = await client.post(
     TOKEN_URL,
     new URLSearchParams({
@@ -48,8 +51,24 @@ async function getToken(clientId: string, clientSecret: string, signal?: AbortSi
   });
 }
 
+/** 获取 token（带缓存），getMarketState 与 upload 共用 */
+function getCachedToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
+  // 共享的 token 请求不绑定调用方信号，避免一个调用方取消导致其他等待者一起失败；signal 只控制本调用方的等待
+  return tokenCache.get(clientId, clientSecret, () => getToken(clientId, clientSecret), signal);
+}
+
+/** 执行使用 token 的操作；失败时清除缓存的 token（可能已被吊销），下次重试重新获取 */
+async function withTokenInvalidation<T>(creds: { client_id: string; client_secret: string }, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    tokenCache.invalidate(creds.client_id, creds.client_secret);
+    throw err;
+  }
+}
+
 async function getAppId(token: string, packageName: string, signal?: AbortSignal): Promise<string> {
-  const client = createHttpClient({ signal });
+  const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
   const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-id`, {
     headers: { Authorization: `Bearer ${token}` },
     params: { pkgName: packageName },
@@ -114,42 +133,50 @@ export const honorChannel: Channel = {
   type: 'market',
   fileNameIdentify: 'HONOR',
   credentialSchema: credSchema,
-  async getMarketState(appId, config) {
+  async getMarketState(appId, config, options) {
     const creds = credSchema.parse(config);
-    const token = await getToken(creds.client_id, creds.client_secret);
-    const honorAppId = await getAppId(token, appId);
-    const client = createHttpClient();
-    // 线上正式版本：get-app-detail 的 releaseInfo（get-app-current-release 返回的可能是未提交草稿）
-    const detailResp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-detail`, {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { appId: honorAppId },
-    });
-    checkHonorResult(detailResp.data, 'getAppInfo');
-    const releaseInfo = detailResp.data?.data?.releaseInfo ?? {};
-    // 当前管线状态（草稿/审核中/上线）
-    const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-current-release`, {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { appId: honorAppId },
-    });
-    checkHonorResult(resp.data, 'getReviewState');
-    const data = releaseInfoSchema.parse(resp.data?.data ?? {});
-    // releaseId 为 null 说明是未提交草稿（曾上传但未提交审核），不算审核状态
-    const isDraft = data.releaseId == null;
-    const reviewState = isDraft
-      ? 'unknown'
-      : data.auditResult === 0
-        ? 'reviewing'
-        : data.auditResult === 1
-          ? 'online'
-          : data.auditResult === 2
-            ? 'rejected'
-            : 'unknown';
-    return {
-      reviewState,
-      enableSubmit: true,
-      lastVersionCode: Number(releaseInfo.versionCode ?? 0),
-      lastVersionName: String(releaseInfo.versionName ?? '0'),
-    };
+    const signal = options?.signal;
+    // 只读查询，网络抖动时整体重试
+    return withRetry(
+      () =>
+        withTokenInvalidation(creds, async () => {
+          const token = await getCachedToken(creds.client_id, creds.client_secret, signal);
+          const honorAppId = await getAppId(token, appId, signal);
+          const client = createHttpClient({ signal, timeout: QUERY_TIMEOUT_MS });
+          // 线上正式版本：get-app-detail 的 releaseInfo（get-app-current-release 返回的可能是未提交草稿）
+          const detailResp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-detail`, {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { appId: honorAppId },
+          });
+          checkHonorResult(detailResp.data, 'getAppInfo');
+          const releaseInfo = detailResp.data?.data?.releaseInfo ?? {};
+          // 当前管线状态（草稿/审核中/上线）
+          const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-current-release`, {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { appId: honorAppId },
+          });
+          checkHonorResult(resp.data, 'getReviewState');
+          const data = releaseInfoSchema.parse(resp.data?.data ?? {});
+          // releaseId 为 null 说明是未提交草稿（曾上传但未提交审核），不算审核状态
+          const isDraft = data.releaseId == null;
+          const reviewState = isDraft
+            ? 'unknown'
+            : data.auditResult === 0
+              ? 'reviewing'
+              : data.auditResult === 1
+                ? 'online'
+                : data.auditResult === 2
+                  ? 'rejected'
+                  : 'unknown';
+          return {
+            reviewState,
+            enableSubmit: true,
+            lastVersionCode: Number(releaseInfo.versionCode ?? 0),
+            lastVersionName: String(releaseInfo.versionName ?? '0'),
+          };
+        }),
+      { signal },
+    );
   },
   async validateCredentials(config) {
     const creds = credSchema.parse(config);
@@ -157,102 +184,104 @@ export const honorChannel: Channel = {
   },
   async upload(ctx: UploadContext) {
     const creds = credSchema.parse(ctx.config);
-    const fileName = path.basename(ctx.filePath);
-    const { signal } = ctx;
-    const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
-    ctx.onProgress({ step: 'getToken' });
-    const token = await retry(() => getToken(creds.client_id, creds.client_secret, signal));
-    const auth = `Bearer ${token}`;
-    ctx.onProgress({ step: 'getAppId' });
-    const appId = await retry(() => getAppId(token, ctx.apkInfo.applicationId, signal));
-    const client = createHttpClient({ signal });
-    ctx.onProgress({ step: 'getAppInfo' });
-    const appInfo = await retry(async () => {
-      const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-detail`, {
+    return withTokenInvalidation(creds, async () => {
+      const fileName = path.basename(ctx.filePath);
+      const { signal } = ctx;
+      const retry = <T>(fn: () => Promise<T>) => withRetry(fn, { signal });
+      ctx.onProgress({ step: 'getToken' });
+      const token = await retry(() => getCachedToken(creds.client_id, creds.client_secret, signal));
+      const auth = `Bearer ${token}`;
+      ctx.onProgress({ step: 'getAppId' });
+      const appId = await retry(() => getAppId(token, ctx.apkInfo.applicationId, signal));
+      const client = createHttpClient({ signal });
+      ctx.onProgress({ step: 'getAppInfo' });
+      const appInfo = await retry(async () => {
+        const resp = await client.get(`${BASE_URL}/openapi/v1/publish/get-app-detail`, {
+          headers: { Authorization: auth },
+          params: { appId },
+        });
+        return checkHonorResult(resp.data, 'getAppInfo', resp.status);
+      });
+      const langInfo = appInfo.data?.languageInfo?.[0] ?? {};
+      ctx.onProgress({ step: 'getUploadUrl' });
+      const sha256 = await fileSha256(ctx.filePath);
+      const uploadUrlData = await retry(async () => {
+        const resp = await client.post(
+          `${BASE_URL}/openapi/v1/publish/get-file-upload-url`,
+          [{ fileName, fileType: 100, fileSize: ctx.apkInfo.size, fileSha256: sha256 }],
+          {
+            headers: { Authorization: auth },
+            params: { appId },
+            // 按原始文本接收并自行解析，保留 objectId 的 64 位精度
+            responseType: 'text',
+            transformResponse: [parseUploadUrlResponse],
+          },
+        );
+        return checkHonorResult(resp.data, 'getUploadUrl', resp.status);
+      });
+      const uploadInfo = uploadUrlData.data?.[0];
+      // 荣耀接口返回字段为 uploadUrl，兼容旧字段 url
+      const uploadUrl: string | undefined = uploadInfo?.uploadUrl ?? uploadInfo?.url;
+      if (!uploadUrl) {
+        throw new ApkpubError({
+          code: ErrorCode.CHANNEL_UPLOAD_FAILED,
+          channel: 'honor',
+          step: 'getUploadUrl',
+          message: `获取上传地址失败: ${JSON.stringify(uploadUrlData)}`,
+          retryable: false,
+        });
+      }
+      ctx.onProgress({ step: 'uploading', percent: 0 });
+      const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS, signal });
+      const form = new FormData();
+      form.append('file', createReadStream(ctx.filePath), { filename: fileName });
+      const uploadResp = await uploadClient.post(uploadUrl, form, {
+        headers: { Authorization: auth, ...form.getHeaders() },
+        maxBodyLength: Infinity,
+        onUploadProgress: (e) => {
+          if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
+        },
+      });
+      if (uploadResp.data?.code !== 0) {
+        throw new ApkpubError({
+          code: ErrorCode.CHANNEL_UPLOAD_FAILED,
+          channel: 'honor',
+          step: 'uploadFile',
+          message: `上传文件失败 (HTTP ${uploadResp.status}): ${JSON.stringify(uploadResp.data)}`,
+          retryable: true,
+        });
+      }
+      ctx.onProgress({ step: 'bindApk' });
+      const bindResp = await client.post(
+        `${BASE_URL}/openapi/v1/publish/update-file-info`,
+        buildBindFileBody(uploadInfo.objectId),
+        { headers: { Authorization: auth, 'content-type': 'application/json' }, params: { appId } },
+      );
+      checkHonorResult(bindResp.data, 'bindApk', bindResp.status);
+      ctx.onProgress({ step: 'updateDesc' });
+      const descResp = await client.post(
+        `${BASE_URL}/openapi/v1/publish/update-language-info`,
+        {
+          languageInfoList: [{
+            appName: langInfo.appName,
+            intro: langInfo.intro,
+            // 荣耀接口的「新版本更新说明」字段名是 newFeature（对照 laiBao HonorVersionDesc.kt）
+            newFeature: ctx.desc,
+            briefIntro: langInfo.briefIntro,
+            languageId: langInfo.languageId ?? 'zh-CN',
+          }],
+        },
+        { headers: { Authorization: auth }, params: { appId } },
+      );
+      checkHonorResult(descResp.data, 'updateDesc', descResp.status);
+      ctx.onProgress({ step: 'submit' });
+      const submitResp = await client.post(`${BASE_URL}/openapi/v1/publish/submit-audit`, { releaseType: 1 }, {
         headers: { Authorization: auth },
         params: { appId },
       });
-      return checkHonorResult(resp.data, 'getAppInfo', resp.status);
+      checkHonorResult(submitResp.data, 'submit', submitResp.status);
+      ctx.onProgress({ step: 'done', percent: 100 });
+      return { message: '提交审核成功' };
     });
-    const langInfo = appInfo.data?.languageInfo?.[0] ?? {};
-    ctx.onProgress({ step: 'getUploadUrl' });
-    const sha256 = await fileSha256(ctx.filePath);
-    const uploadUrlData = await retry(async () => {
-      const resp = await client.post(
-        `${BASE_URL}/openapi/v1/publish/get-file-upload-url`,
-        [{ fileName, fileType: 100, fileSize: ctx.apkInfo.size, fileSha256: sha256 }],
-        {
-          headers: { Authorization: auth },
-          params: { appId },
-          // 按原始文本接收并自行解析，保留 objectId 的 64 位精度
-          responseType: 'text',
-          transformResponse: [parseUploadUrlResponse],
-        },
-      );
-      return checkHonorResult(resp.data, 'getUploadUrl', resp.status);
-    });
-    const uploadInfo = uploadUrlData.data?.[0];
-    // 荣耀接口返回字段为 uploadUrl，兼容旧字段 url
-    const uploadUrl: string | undefined = uploadInfo?.uploadUrl ?? uploadInfo?.url;
-    if (!uploadUrl) {
-      throw new ApkpubError({
-        code: ErrorCode.CHANNEL_UPLOAD_FAILED,
-        channel: 'honor',
-        step: 'getUploadUrl',
-        message: `获取上传地址失败: ${JSON.stringify(uploadUrlData)}`,
-        retryable: false,
-      });
-    }
-    ctx.onProgress({ step: 'uploading', percent: 0 });
-    const uploadClient = createHttpClient({ timeout: UPLOAD_TIMEOUT_MS, signal });
-    const form = new FormData();
-    form.append('file', createReadStream(ctx.filePath), { filename: fileName });
-    const uploadResp = await uploadClient.post(uploadUrl, form, {
-      headers: { Authorization: auth, ...form.getHeaders() },
-      maxBodyLength: Infinity,
-      onUploadProgress: (e) => {
-        if (e.total) ctx.onProgress({ step: 'uploading', percent: Math.round((e.loaded / e.total) * 100) });
-      },
-    });
-    if (uploadResp.data?.code !== 0) {
-      throw new ApkpubError({
-        code: ErrorCode.CHANNEL_UPLOAD_FAILED,
-        channel: 'honor',
-        step: 'uploadFile',
-        message: `上传文件失败 (HTTP ${uploadResp.status}): ${JSON.stringify(uploadResp.data)}`,
-        retryable: true,
-      });
-    }
-    ctx.onProgress({ step: 'bindApk' });
-    const bindResp = await client.post(
-      `${BASE_URL}/openapi/v1/publish/update-file-info`,
-      buildBindFileBody(uploadInfo.objectId),
-      { headers: { Authorization: auth, 'content-type': 'application/json' }, params: { appId } },
-    );
-    checkHonorResult(bindResp.data, 'bindApk', bindResp.status);
-    ctx.onProgress({ step: 'updateDesc' });
-    const descResp = await client.post(
-      `${BASE_URL}/openapi/v1/publish/update-language-info`,
-      {
-        languageInfoList: [{
-          appName: langInfo.appName,
-          intro: langInfo.intro,
-          // 荣耀接口的「新版本更新说明」字段名是 newFeature（对照 laiBao HonorVersionDesc.kt）
-          newFeature: ctx.desc,
-          briefIntro: langInfo.briefIntro,
-          languageId: langInfo.languageId ?? 'zh-CN',
-        }],
-      },
-      { headers: { Authorization: auth }, params: { appId } },
-    );
-    checkHonorResult(descResp.data, 'updateDesc', descResp.status);
-    ctx.onProgress({ step: 'submit' });
-    const submitResp = await client.post(`${BASE_URL}/openapi/v1/publish/submit-audit`, { releaseType: 1 }, {
-      headers: { Authorization: auth },
-      params: { appId },
-    });
-    checkHonorResult(submitResp.data, 'submit', submitResp.status);
-    ctx.onProgress({ step: 'done', percent: 100 });
-    return { message: '提交审核成功' };
   },
 };

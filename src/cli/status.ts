@@ -1,12 +1,11 @@
 import { Command } from 'commander';
 import { loadConfig } from '../config/store.js';
-import { resolveChannels } from '../channels/registry.js';
-import { resolveConfigSecrets } from '../secrets/resolver.js';
-import { TaskLauncher } from '../core/TaskLauncher.js';
-import { printJson, printStatusResults } from '../utils/output.js';
+import { queryMarketStatus } from '../core/inspect.js';
+import { printJson, printStatusResults, exitAfterFlush } from '../utils/output.js';
 import { setJsonMode } from '../utils/logger.js';
-import { ApkpubError } from '../errors/ApkpubError.js';
+import { toApkpubError } from '../errors/ApkpubError.js';
 import { ExitCode } from '../core/result.js';
+import { getErrorExitCode } from './exitCodes.js';
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -19,53 +18,45 @@ export function registerStatusCommand(program: Command): void {
       setJsonMode(!!options.json);
       try {
         const appConfig = await loadConfig(options.app);
-        const channels = resolveChannels(appConfig, options.channels);
-        const results = [];
+        const statuses = await queryMarketStatus(appConfig, options.channels);
+        const results = statuses.map((r) =>
+          r.unsupported
+            ? { name: r.name, label: r.label, state: 'n/a', error: '自定义渠道无市场状态' }
+            : r.ok
+              ? {
+                  name: r.name,
+                  label: r.label,
+                  state: r.state?.reviewState ?? 'unknown',
+                  versionCode: r.state?.lastVersionCode,
+                  versionName: r.state?.lastVersionName,
+                }
+              : { name: r.name, label: r.label, error: r.error?.message },
+        );
 
-        for (const channel of channels) {
-          if (!channel.getMarketState) {
-            results.push({ name: channel.name, label: channel.label, state: 'n/a', error: '自定义渠道无市场状态' });
-            continue;
-          }
-          const chConfig = appConfig.channels.find((c) => c.name === channel.name);
-          if (!chConfig) {
-            results.push({ name: channel.name, label: channel.label, error: `渠道 ${channel.name} 未在配置中启用` });
-            continue;
-          }
-          try {
-            const rawParams = TaskLauncher.getRawParams(chConfig);
-            const resolved = await resolveConfigSecrets(rawParams);
-            const state = await channel.getMarketState(appConfig.applicationId, resolved);
-            results.push({
-              name: channel.name,
-              label: channel.label,
-              state: state?.reviewState ?? 'unknown',
-              versionCode: state?.lastVersionCode,
-              versionName: state?.lastVersionName,
-            });
-          } catch (err) {
-            results.push({
-              name: channel.name,
-              label: channel.label,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        // 只统计支持市场查询的渠道：全部失败 → 5，部分失败 → 4
+        const queried = statuses.filter((r) => !r.unsupported);
+        const failed = queried.filter((r) => !r.ok).length;
+        const exitCode =
+          failed === 0
+            ? ExitCode.SUCCESS
+            : failed === queried.length
+              ? ExitCode.ALL_FAILED
+              : ExitCode.PARTIAL_FAILURE;
 
         if (options.json) {
-          printJson({ ok: true, results });
+          printJson({ ok: failed === 0, results });
         } else {
           printStatusResults(results);
         }
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(exitCode);
       } catch (err) {
-        const message = err instanceof ApkpubError ? err.message : String(err);
+        const apkErr = toApkpubError(err);
         if (options.json) {
-          printJson({ ok: false, error: { message } });
+          printJson({ ok: false, error: { code: apkErr.code, message: apkErr.message } });
         } else {
-          process.stderr.write(`错误: ${message}\n`);
+          process.stderr.write(`错误: ${apkErr.message}\n`);
         }
-        process.exit(ExitCode.INVALID_ARGUMENT);
+        await exitAfterFlush(getErrorExitCode(apkErr));
       }
     });
 }

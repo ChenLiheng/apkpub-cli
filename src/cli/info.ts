@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { parseApk } from '../apk/ApkParser.js';
-import { printJson } from '../utils/output.js';
+import { printJson, exitAfterFlush } from '../utils/output.js';
 import { ApkpubError, ErrorCode } from '../errors/ApkpubError.js';
 import { ExitCode } from '../core/result.js';
 
@@ -28,7 +28,7 @@ export function registerInfoCommand(program: Command): void {
           process.stderr.write(`版本名: ${info.versionName}\n`);
           process.stderr.write(`大小: ${output.sizeMB} MB\n`);
         }
-        process.exit(ExitCode.SUCCESS);
+        await exitAfterFlush(ExitCode.SUCCESS);
       } catch (err) {
         const message = err instanceof ApkpubError ? err.message : String(err);
         if (options.json) {
@@ -36,7 +36,7 @@ export function registerInfoCommand(program: Command): void {
         } else {
           process.stderr.write(`错误: ${message}\n`);
         }
-        process.exit(ExitCode.INVALID_ARGUMENT);
+        await exitAfterFlush(ExitCode.INVALID_ARGUMENT);
       }
     });
 }

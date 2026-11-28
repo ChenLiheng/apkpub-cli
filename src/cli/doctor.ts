@@ -1,12 +1,11 @@
 import { Command } from 'commander';
 import { loadConfig } from '../config/store.js';
-import { resolveChannels } from '../channels/registry.js';
-import { resolveConfigSecrets } from '../secrets/resolver.js';
-import { TaskLauncher } from '../core/TaskLauncher.js';
-import { printJson } from '../utils/output.js';
+import { runDoctor } from '../core/inspect.js';
+import { printJson, exitAfterFlush } from '../utils/output.js';
 import { setJsonMode } from '../utils/logger.js';
-import { ApkpubError } from '../errors/ApkpubError.js';
+import { toApkpubError } from '../errors/ApkpubError.js';
 import { ExitCode } from '../core/result.js';
+import { getErrorExitCode } from './exitCodes.js';
 
 export function registerDoctorCommand(program: Command): void {
   program
@@ -18,30 +17,11 @@ export function registerDoctorCommand(program: Command): void {
       setJsonMode(!!options.json);
       try {
         const appConfig = await loadConfig(options.app);
-        const channels = resolveChannels(appConfig);
-        const checks: { channel: string; ok: boolean; message: string }[] = [];
-
-        for (const channel of channels) {
-          const chConfig = appConfig.channels.find((c) => c.name === channel.name);
-          if (!chConfig) {
-            checks.push({ channel: channel.name, ok: false, message: `渠道 ${channel.name} 未在配置中启用` });
-            continue;
-          }
-          try {
-            const rawParams = TaskLauncher.getRawParams(chConfig);
-            const resolved = await resolveConfigSecrets(rawParams);
-            if (channel.validateCredentials) {
-              await channel.validateCredentials(resolved);
-            }
-            checks.push({ channel: channel.name, ok: true, message: '凭证有效' });
-          } catch (err) {
-            checks.push({
-              channel: channel.name,
-              ok: false,
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        const checks = (await runDoctor(appConfig)).map((r) => ({
+          channel: r.name,
+          ok: r.ok,
+          message: r.ok ? '凭证有效' : (r.error?.message ?? '未知错误'),
+        }));
 
         const allOk = checks.every((c) => c.ok);
         const output = { ok: allOk, app: options.app, checks };
@@ -53,15 +33,15 @@ export function registerDoctorCommand(program: Command): void {
             process.stderr.write(`${icon} [${c.channel}] ${c.message}\n`);
           }
         }
-        process.exit(allOk ? ExitCode.SUCCESS : ExitCode.ALL_FAILED);
+        await exitAfterFlush(allOk ? ExitCode.SUCCESS : ExitCode.ALL_FAILED);
       } catch (err) {
-        const message = err instanceof ApkpubError ? err.message : String(err);
+        const apkErr = toApkpubError(err);
         if (options.json) {
-          printJson({ ok: false, error: { message } });
+          printJson({ ok: false, error: { code: apkErr.code, message: apkErr.message } });
         } else {
-          process.stderr.write(`错误: ${message}\n`);
+          process.stderr.write(`错误: ${apkErr.message}\n`);
         }
-        process.exit(ExitCode.INVALID_ARGUMENT);
+        await exitAfterFlush(getErrorExitCode(apkErr));
       }
     });
 }
