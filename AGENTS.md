@@ -168,3 +168,16 @@ interface Channel {
 - 单元测试集中在 `signers/*.test.ts`、`utils/template.test.ts`；HTTP 交互用 `nock` mock，避免真实网络。
 - 渠道上传逻辑（`getMarketState`/`upload`）建议补充 mock 测试，覆盖鉴权失败、版本过低、上传非 2xx 等分支。
 - 提交前跑 `pnpm typecheck && pnpm test`。
+
+## 13. 分支命名规范
+
+新建分支一律从最新 `main` 切出，并使用 `<类型>/<简短描述>` 形式（小写、短横线分隔）：
+
+| 前缀        | 用途                               | 示例                       |
+| ----------- | ---------------------------------- | -------------------------- |
+| `feat/`     | 新功能                             | `feat/samsung-channel`     |
+| `fix/`      | 缺陷修复                           | `fix/honor-objectid`       |
+| `chore/`    | 优化、维护、依赖升级、构建与配置   | `chore/optimize`           |
+| `refactor/` | 不改变行为的代码重构               | `refactor/dispatcher`      |
+| `docs/`     | 文档变更                           | `docs/readme-channels`     |
+| `test/`     | 测试补充与调整                     | `test/mi-upload-mock`      |
